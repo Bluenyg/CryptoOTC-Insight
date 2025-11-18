@@ -1,22 +1,28 @@
-import requests
+# src/core/mcp_server/crypto_sentiment_mcp.py
+import httpx  # <-- [FIX] 导入 httpx
 from mcp.server.fastmcp import FastMCP
 from datetime import datetime, timedelta, UTC
-import os
-from dotenv import load_dotenv
+# --- [FIX] 从中央配置导入 settings ---
+from config.settings import settings
 
-load_dotenv()
+# ---
 
 mcp = FastMCP("CryptoSentiment")
-SANTIMENT_API_KEY = os.getenv("SANTIMENT_API_KEY")
+
+# --- [FIX] 直接使用导入的 settings 对象 ---
+SANTIMENT_API_KEY = settings.SANTIMENT_API_KEY
+# ---
+
 if not SANTIMENT_API_KEY:
-    raise ValueError("SANTIMENT_API_KEY not found in environment variables. Please set it in .env file.")
+    raise ValueError("SANTIMENT_API_KEY not found in config/settings.py.")
+
 SANTIMENT_API_URL = "https://api.santiment.net/graphql"
 HEADERS = {"Authorization": f"Apikey {SANTIMENT_API_KEY}"}
 
 
-def fetch_santiment_data(metric: str, asset: str, days: int) -> dict:
+# --- [FIX] 重写为异步函数 ---
+async def fetch_santiment_data(metric: str, asset: str, days: int) -> dict:
     now = datetime.now(UTC)
-
     to_date = now
     from_date = to_date - timedelta(days=days)
 
@@ -35,16 +41,18 @@ def fetch_santiment_data(metric: str, asset: str, days: int) -> dict:
       }}
     }}
     """
-    response = requests.post(SANTIMENT_API_URL, json={"query": query}, headers=HEADERS)
+    # 使用 httpx.AsyncClient
+    async with httpx.AsyncClient() as client:
+        response = await client.post(SANTIMENT_API_URL, json={"query": query}, headers=HEADERS)
+
     result = response.json()
     if result.get("errors"):
         raise Exception(f"API error: {result.get('errors')}")
     return result
 
 
-def fetch_trending_words(days: int = 7) -> dict:
+async def fetch_trending_words(days: int = 7) -> dict:
     now = datetime.now(UTC)
-
     to_date = now
     from_date = to_date - timedelta(days=days)
 
@@ -59,30 +67,26 @@ def fetch_trending_words(days: int = 7) -> dict:
       }}
     }}
     """
-    response = requests.post(SANTIMENT_API_URL, json={"query": query}, headers=HEADERS)
+    # 使用 httpx.AsyncClient
+    async with httpx.AsyncClient() as client:
+        response = await client.post(SANTIMENT_API_URL, json={"query": query}, headers=HEADERS)
+
     result = response.json()
     if result.get("errors"):
         raise Exception(f"API error: {result.get('errors')}")
     return result
 
 
+# --- [FIX] 所有的 tool 都必须是 async def ---
+
 @mcp.tool()
-def get_sentiment_balance(asset: str, days: int = 7) -> str:
+async def get_sentiment_balance(asset: str, days: int = 7) -> str:
     """
-    Retrieve the sentiment balance (sentiment_balance_total) for a given asset.
-
-    Parameters:
-    - asset (str): The cryptocurrency slug (e.g., "bitcoin", "ethereum"). Required.
-    - days (int): Number of days to calculate the average sentiment balance, defaults to 7.
-
-    Usage:
-    - Use this tool to get the average sentiment balance (positive minus negative sentiment) over a period.
-
-    Returns:
-    - A string with the average sentiment balance (e.g., "Bitcoin's sentiment balance over the past 7 days is 12.5").
+    (异步) 检索给定资产的情绪平衡。
     """
     try:
-        data = fetch_santiment_data("sentiment_balance_total", asset, days)
+        # [FIX] 使用 await 调用
+        data = await fetch_santiment_data("sentiment_balance_total", asset, days)
         timeseries = data.get("data", {}).get("getMetric", {}).get("timeseriesData", [])
         if not timeseries:
             return f"Unable to fetch sentiment data for {asset}. Check subscription limits or asset availability."
@@ -93,22 +97,13 @@ def get_sentiment_balance(asset: str, days: int = 7) -> str:
 
 
 @mcp.tool()
-def get_social_volume(asset: str, days: int = 7) -> str:
+async def get_social_volume(asset: str, days: int = 7) -> str:
     """
-    Retrieve the total social volume (social_volume_total) for a given asset. It calculates the total number of social data text documents that contain the given search term at least once. Examples of documents are telegram messages and reddit posts.
-
-    Parameters:
-    - asset (str): The cryptocurrency slug (e.g., "bitcoin", "ethereum"). Required.
-    - days (int): Number of days to sum the social volume, defaults to 7.
-
-    Usage:
-    - Call this tool to get the total number of social media mentions for an asset over a period.
-
-    Returns:
-    - A string with the total social volume (e.g., "Bitcoin's social volume over the past 7 days is 15,000 mentions").
+    (异步) 检索给定资产的社交总量。
     """
     try:
-        data = fetch_santiment_data("social_volume_total", asset, days)
+        # [FIX] 使用 await 调用
+        data = await fetch_santiment_data("social_volume_total", asset, days)
         timeseries = data.get("data", {}).get("getMetric", {}).get("timeseriesData", [])
         if not timeseries:
             return f"Unable to fetch social volume for {asset}. Check subscription limits or asset availability."
@@ -119,31 +114,26 @@ def get_social_volume(asset: str, days: int = 7) -> str:
 
 
 @mcp.tool()
-def alert_social_shift(asset: str, threshold: float = 50.0, days: int = 7) -> str:
+async def alert_social_shift(asset: str, threshold: float = 50.0, days: int = 7) -> str:
     """
-    Detect significant shifts (spikes or drops) in social volume (social_volume_total) for a given asset.
-
-    Parameters:
-    - asset (str): The cryptocurrency slug (e.g., "bitcoin", "ethereum"). Required.
-    - threshold (float): Minimum percentage change (absolute value) to trigger an alert, defaults to 50.0 (i.e., 50%).
-    - days (int): Number of days to analyze for baseline volume, defaults to 7.
-
-    Usage:
-    - Call this tool to check if the latest social volume has significantly spiked or dropped compared to the previous average.
-
-    Returns:
-    - A string indicating if a shift occurred (e.g., "Bitcoin's social volume spiked by 75.0% in the last 24 hours" or "Bitcoin's social volume dropped by 60.0% in the last 24 hours").
+    (异步) 检测社交总量的重大变化。
     """
     try:
-        data = fetch_santiment_data("social_volume_total", asset, days)
+        # [FIX] 使用 await 调用
+        data = await fetch_santiment_data("social_volume_total", asset, days)
         timeseries = data.get("data", {}).get("getMetric", {}).get("timeseriesData", [])
 
         if not timeseries or len(timeseries) < 2:
             return f"Unable to detect social volume shift for {asset}, insufficient data."
 
-        latest_volume = int(timeseries[-1]["value"])  # Latest day's volume
+        latest_volume = int(timeseries[-1]["value"])
         prev_avg_volume = sum(int(d["value"]) for d in timeseries[:-1]) / (
-                    len(timeseries) - 1)  # Average of previous days
+                len(timeseries) - 1)
+
+        # 避免除零错误
+        if prev_avg_volume == 0:
+            return f"No baseline social volume for {asset.capitalize()} to detect shift."
+
         change_percent = ((latest_volume - prev_avg_volume) / prev_avg_volume) * 100
 
         abs_change = abs(change_percent)
@@ -156,22 +146,13 @@ def alert_social_shift(asset: str, threshold: float = 50.0, days: int = 7) -> st
 
 
 @mcp.tool()
-def get_trending_words(days: int = 7, top_n: int = 5) -> str:
+async def get_trending_words(days: int = 7, top_n: int = 5) -> str:
     """
-    Retrieve the top trending words in the crypto space over a specified period, aggregated and ranked by score.
-
-    Parameters:
-    - days (int): Number of days to analyze trending words, defaults to 7.
-    - top_n (int): Number of top trending words to return, defaults to 5.
-
-    Usage:
-    - Call this tool to get a list of the most popular words trending in cryptocurrency discussions, ranked across the entire period.
-
-    Returns:
-    - A string listing the top trending words (e.g., "Top 5 trending words over the past 7 days: 'halving', 'bullrun', 'defi', 'nft', 'pump'").
+    (异步) 检索热门词汇。
     """
     try:
-        data = fetch_trending_words(days)
+        # [FIX] 使用 await 调用
+        data = await fetch_trending_words(days)
         trends = data.get("data", {}).get("getTrendingWords", [])
         if not trends:
             return "Unable to fetch trending words. Check API subscription limits or connectivity."
@@ -198,22 +179,13 @@ def get_trending_words(days: int = 7, top_n: int = 5) -> str:
 
 
 @mcp.tool()
-def get_social_dominance(asset: str, days: int = 7) -> str:
+async def get_social_dominance(asset: str, days: int = 7) -> str:
     """
-    Retrieve the social dominance (social_dominance_total) for a given asset. Social Dominance shows the share of the discussions in crypto media that is referring to a particular asset or phrase.
-
-    Parameters:
-    - asset (str): The cryptocurrency slug (e.g., "bitcoin", "ethereum"). Required.
-    - days (int): Number of days to calculate average social dominance, defaults to 7.
-
-    Usage:
-    - Call this tool to get the percentage of social media discussion dominated by the asset.
-
-    Returns:
-    - A string with the average social dominance (e.g., "Bitcoin's social dominance over the past 7 days is 25.3%").
+    (异步) 检索社交主导地位。
     """
     try:
-        data = fetch_santiment_data("social_dominance_total", asset, days)
+        # [FIX] 使用 await 调用
+        data = await fetch_santiment_data("social_dominance_total", asset, days)
         timeseries = data.get("data", {}).get("getMetric", {}).get("timeseriesData", [])
         if not timeseries:
             return f"Unable to fetch social dominance for {asset}. Check subscription limits or asset availability."
@@ -222,7 +194,6 @@ def get_social_dominance(asset: str, days: int = 7) -> str:
     except Exception as e:
         return f"Error fetching social dominance for {asset}: {str(e)}"
 
-
-# 在 crypto_sentiment_mcp.py 底部修改为:
-if __name__ == "__main__":
-    mcp.run(transport="sse", port=8002)
+# [FIX] 移除 mcp.run()。它在被 main.py 导入时不需要
+# if __name__ == "__main__":
+#     mcp.run(transport="sse", port=8002)

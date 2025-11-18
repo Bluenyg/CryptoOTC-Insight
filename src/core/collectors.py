@@ -1,3 +1,4 @@
+# src/core/collectors.py
 import asyncio
 import websockets
 import json
@@ -12,10 +13,11 @@ from src.core.models import SentimentMetrics
 
 from config.settings import settings
 
-# --- 配置 ---
-NEWS_MCP_URL = "http://localhost:8001/sse"
-SENTIMENT_MCP_URL = "http://localhost:8002/sse"
+# --- [FIX] 修正 URL 以匹配 main.py 中的挂载路径 ---
+NEWS_MCP_URL = "http://localhost:8000/news"
+SENTIMENT_MCP_URL = "http://localhost:8000/sentiment"
 MAIN_SERVER_WS = "ws://localhost:8000/ws/data_ingest"
+# ---
 
 NEWS_POLL_INTERVAL = 300
 SENTIMENT_POLL_INTERVAL = 300
@@ -23,21 +25,19 @@ SENTIMENT_POLL_INTERVAL = 300
 # 1. 新闻采集器
 seen_article_titles: Set[str] = set()
 
-
 async def run_news_collector():
     """
     后台任务:轮询 News MCP, 将新新闻推送到 WebSocket 进行NLP处理。
     """
     await asyncio.sleep(10)
-    print("[NewsCollector]: 启动... (轮询 News MCP at port 8001)")
+    # [FIX] 更新日志以反映正确的 URL
+    print(f"[NewsCollector]: 启动... (轮询 News MCP at {NEWS_MCP_URL})")
 
     while True:
         try:
-            # 创建 SSETransport,只传递 url 参数
+            # (你的 SseTransport 和 Client 构造是正确的)
             news_transport = SSETransport(url=NEWS_MCP_URL)
-
-            # 创建 Client,设置超时参数
-            news_client = Client(news_transport, timeout=60.0)
+            news_client = Client(news_transport, timeout=15.0)
 
             async with news_client:
                 print("[NewsCollector]: 正在拉取新闻...")
@@ -46,6 +46,7 @@ async def run_news_collector():
                     arguments={}
                 )
 
+                # ... (其余的新闻处理逻辑保持不变) ...
                 news_blob = ""
                 if hasattr(result, 'content') and result.content:
                     for item in result.content:
@@ -96,20 +97,18 @@ async def run_news_collector():
 # 2. 情绪采集器
 ASSETS_TO_TRACK = ["bitcoin", "ethereum"]
 
-
 async def run_sentiment_collector():
     """
     后台任务:轮询 Sentiment MCP, 将原始指标 *直接* 写入数据库。
     """
     await asyncio.sleep(15)
-    print("[SentimentCollector]: 启动... (轮询 Sentiment MCP at port 8002)")
+    # [FIX] 更新日志以反映正确的 URL
+    print(f"[SentimentCollector]: 启动... (轮询 Sentiment MCP at {SENTIMENT_MCP_URL})")
 
     while True:
         try:
-            # 创建 SSETransport,只传递 url 参数
+            # (你的 SseTransport 和 Client 构造是正确的)
             sentiment_transport = SSETransport(url=SENTIMENT_MCP_URL)
-
-            # 创建 Client,设置超时参数
             sentiment_client = Client(sentiment_transport, timeout=60.0)
 
             async with sentiment_client:
@@ -118,6 +117,7 @@ async def run_sentiment_collector():
 
                 for asset in ASSETS_TO_TRACK:
                     try:
+                        # ... (其余的情绪处理逻辑保持不变) ...
                         volume_result = await asyncio.wait_for(
                             sentiment_client.call_tool(
                                 "get_social_volume",
@@ -125,7 +125,7 @@ async def run_sentiment_collector():
                             ),
                             timeout=30.0
                         )
-
+                        # ... (省略) ...
                         volume_text = ""
                         if hasattr(volume_result, 'content') and volume_result.content:
                             for item in volume_result.content:
@@ -141,7 +141,7 @@ async def run_sentiment_collector():
                             ),
                             timeout=30.0
                         )
-
+                        # ... (省略) ...
                         balance_text = ""
                         if hasattr(balance_result, 'content') and balance_result.content:
                             for item in balance_result.content:
@@ -155,19 +155,18 @@ async def run_sentiment_collector():
                     except Exception as tool_error:
                         print(f"[SentimentCollector] 调用工具出错 ({asset}): {tool_error}")
 
-                # 处理数据库写入逻辑
+                # ... (数据库写入逻辑保持不变) ...
                 entries_to_add = []
+                # ... (省略) ...
                 for asset, metric_type, result_str in metrics_data:
                     if not result_str:
                         print(f"[SentimentCollector] {asset} 的 {metric_type} 返回空结果")
                         continue
-
                     try:
                         if " is " in result_str:
                             value_part = result_str.split(" is ")[1]
                             value_str = value_part.split()[0].replace(",", "").rstrip(".")
                             value_float = float(value_str)
-
                             entries_to_add.append(
                                 SentimentMetrics(
                                     asset=asset,
@@ -202,14 +201,13 @@ async def run_sentiment_collector():
 
         await asyncio.sleep(SENTIMENT_POLL_INTERVAL)
 
-
+# ... (start_all_collectors 和 __main__ 保持不变) ...
 async def start_all_collectors():
     """启动所有采集器"""
     await asyncio.gather(
         run_news_collector(),
         run_sentiment_collector()
     )
-
 
 if __name__ == "__main__":
     # 用于测试

@@ -107,6 +107,3 @@ def summarize_news(query: str) -> str:
     )
 
 
-# 在 crypto_sentiment_mcp.py 底部修改为:
-if __name__ == "__main__":
-    mcp.run(transport="sse", port=8001)
