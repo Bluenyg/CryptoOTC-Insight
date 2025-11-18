@@ -8,7 +8,7 @@ import os
 load_dotenv()
 
 # Initialize the MCP server
-mcp = FastMCP("CryptoNewsServer")
+mcp = FastMCP("CryptoNewsServer",port=8001)
 
 # Get API key from environment variable
 API_KEY = os.getenv("NEWS_API_KEY")
@@ -105,5 +105,11 @@ def summarize_news(query: str) -> str:
         f"Please summarize the latest news about {query} based on the following data:\n\n"
         f"{{{{ get_crypto_news(\"{query}\") }}}}"
     )
+
+# [FIX] 添加 'if __name__ == "__main__"' 以便独立运行
+if __name__ == "__main__":
+    print("Starting News MCP Server on port 8001...")
+    # 使用 SSE 传输协议在 8001 端口运行
+    mcp.run(transport="sse")
 
 

@@ -2,12 +2,11 @@
 from typing_extensions import TypedDict
 from typing import Literal, Optional
 from langgraph.graph import StateGraph, END
+from enum import Enum  # 导入 Enum 以进行类型检查
 
 from src.schemas.data_models import RawDataInput, ProcessedData
-# --- [FIX] 导入新的会话 和 模型 ---
 from src.core.database import async_session
 from src.core.models import ProcessedNews
-# ---
 
 from .filter_agent import run_filter_agent
 from .nlp_agent import run_nlp_agent
@@ -36,11 +35,10 @@ async def analysis_node(state: SmallAgentState) -> dict:
     if processed_data:
         return {"processed_data": processed_data}
     else:
-        # 如果分析失败，当作不相关处理
         return {"is_relevant": False}
 
 
-# --- [FIX] 重写 db_write_node ---
+# --- [FIX] 修复数据库写入错误 ---
 async def db_write_node(state: SmallAgentState):
     """将处理结果异步写入数据库"""
     data = state['processed_data']
@@ -50,32 +48,37 @@ async def db_write_node(state: SmallAgentState):
         return {}
 
     try:
-        # 将 Pydantic (ProcessedData) 模式转换为 SQLAlchemy (ProcessedNews) 模型
+        # [FIX] 这里的逻辑更健壮：
+        # 如果它是 Enum，取 .value；如果已经是 str，直接使用。
+        sentiment_val = data.sentiment.value if hasattr(data.sentiment, 'value') else data.sentiment
+        market_impact_val = data.market_impact.value if hasattr(data.market_impact, 'value') else data.market_impact
+
         news_entry = ProcessedNews(
             raw_content=data.raw_content,
             source=data.source,
             summary=data.summary,
-            sentiment=data.sentiment.value,
-            market_impact=data.market_impact.value,
+            sentiment=sentiment_val,      # [FIX] 使用处理后的值
+            market_impact=market_impact_val, # [FIX] 使用处理后的值
             long_short_score=data.long_short_score
         )
 
-        # 使用新的 'async_session'
         async with async_session() as session:
             async with session.begin():
                 session.add(news_entry)
-            # 'await session.commit()' 在 'async with session.begin()' 中自动完成
 
         print(f"[Pipeline]: Saved to DB: {data.summary[:30]}...")
 
     except Exception as e:
         print(f"[Pipeline] CRITICAL DB ERROR: {e}")
+        # 打印更多信息以便调试
+        import traceback
+        traceback.print_exc()
 
     return {}
 
 
 async def log_noise_node(state: SmallAgentState):
-    """（可选）记录噪音，以便未来训练"""
+    """（可选）记录噪音"""
     print(f"[Pipeline]: Logged noise: {state['raw_data'].content[:30]}...")
     return {}
 
@@ -93,16 +96,13 @@ def decide_to_process(state: SmallAgentState) -> Literal["run_analysis", "log_no
 def create_small_agent_graph():
     graph = StateGraph(SmallAgentState)
 
-    # 添加所有节点
     graph.add_node("filter", filter_node)
     graph.add_node("analysis", analysis_node)
     graph.add_node("db_write", db_write_node)
     graph.add_node("log_noise", log_noise_node)
 
-    # 设定入口
     graph.set_entry_point("filter")
 
-    # 添加边
     graph.add_conditional_edges(
         "filter",
         decide_to_process,
@@ -115,9 +115,7 @@ def create_small_agent_graph():
     graph.add_edge("db_write", END)
     graph.add_edge("log_noise", END)
 
-    # 编译
     return graph.compile()
 
 
-# 创建一个可调用的实例
 small_agent_graph = create_small_agent_graph()

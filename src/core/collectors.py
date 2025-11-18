@@ -1,6 +1,6 @@
 # src/core/collectors.py
 import asyncio
-import websockets
+# import websockets  <-- [FIX] 不再需要 websocket 库
 import json
 import time
 from typing import Set
@@ -11,13 +11,17 @@ from fastmcp.client.transports import SSETransport
 from src.core.database import async_session
 from src.core.models import SentimentMetrics
 
+# --- [FIX] 导入需要直接调用的组件 ---
+from src.agents.small_agents.pipeline import small_agent_graph
+from src.schemas.data_models import RawDataInput
+# ----------------------------------
+
 from config.settings import settings
 
-# --- [FIX] 修正 URL 以匹配 main.py 中的挂载路径 ---
-NEWS_MCP_URL = "http://localhost:8000/news"
-SENTIMENT_MCP_URL = "http://localhost:8000/sentiment"
-MAIN_SERVER_WS = "ws://localhost:8000/ws/data_ingest"
-# ---
+# --- 配置 ---
+NEWS_MCP_URL = "http://localhost:8001/sse"
+SENTIMENT_MCP_URL = "http://localhost:8002/sse"
+# MAIN_SERVER_WS = "ws://localhost:8000/ws/data_ingest"  <-- [FIX] 不再需要
 
 NEWS_POLL_INTERVAL = 300
 SENTIMENT_POLL_INTERVAL = 300
@@ -25,18 +29,17 @@ SENTIMENT_POLL_INTERVAL = 300
 # 1. 新闻采集器
 seen_article_titles: Set[str] = set()
 
+
 async def run_news_collector():
     """
-    后台任务:轮询 News MCP, 将新新闻推送到 WebSocket 进行NLP处理。
+    后台任务:轮询 News MCP, 并直接调用 Small Agent 进行处理 (不再走 WebSocket)。
     """
     await asyncio.sleep(10)
-    # [FIX] 更新日志以反映正确的 URL
     print(f"[NewsCollector]: 启动... (轮询 News MCP at {NEWS_MCP_URL})")
 
     while True:
         try:
-            # (你的 SseTransport 和 Client 构造是正确的)
-            news_transport = SSETransport(url=NEWS_MCP_URL)
+            news_transport = SSETransport(url=NEWS_MCP_URL, sse_read_timeout=60.0)
             news_client = Client(news_transport, timeout=15.0)
 
             async with news_client:
@@ -46,7 +49,6 @@ async def run_news_collector():
                     arguments={}
                 )
 
-                # ... (其余的新闻处理逻辑保持不变) ...
                 news_blob = ""
                 if hasattr(result, 'content') and result.content:
                     for item in result.content:
@@ -55,33 +57,32 @@ async def run_news_collector():
 
                 if news_blob and news_blob != "No recent news available.":
                     articles = news_blob.strip().split('\n')
-                    new_articles_found = 0
+                    new_articles_count = 0
 
-                    try:
-                        async with websockets.connect(
-                                MAIN_SERVER_WS,
-                                timeout=10,
-                                ping_timeout=20
-                        ) as websocket:
-                            for article_line in articles:
-                                if " (Published: " in article_line:
-                                    title = article_line.split(" (Published: ")[0]
-                                    if title not in seen_article_titles:
-                                        new_articles_found += 1
-                                        seen_article_titles.add(title)
-                                        raw_data = {
-                                            "source": "mcp-news",
-                                            "timestamp": time.time(),
-                                            "content": article_line
-                                        }
-                                        await websocket.send(json.dumps(raw_data))
-                                        await asyncio.wait_for(websocket.recv(), timeout=5.0)
+                    for article_line in articles:
+                        if " (Published: " in article_line:
+                            title = article_line.split(" (Published: ")[0]
+                            if title not in seen_article_titles:
+                                new_articles_count += 1
+                                seen_article_titles.add(title)
 
-                            print(f"[NewsCollector]: 拉取完成。发现 {new_articles_found} 条新新闻。")
-                    except Exception as ws_error:
-                        print(f"[NewsCollector] WebSocket连接错误: {ws_error}")
-                else:
-                    print("[NewsCollector]: 没有新新闻。")
+                                # --- [FIX] 直接构造数据对象 ---
+                                raw_data = RawDataInput(
+                                    source="mcp-news",
+                                    timestamp=time.time(),
+                                    content=article_line
+                                )
+
+                                # --- [FIX] 直接调用 Agent (内部函数调用) ---
+                                # 这里的 ainvoke 是异步的，会在后台处理
+                                asyncio.create_task(
+                                    small_agent_graph.ainvoke({"raw_data": raw_data})
+                                )
+
+                    if new_articles_count > 0:
+                        print(f"[NewsCollector]: 已将 {new_articles_count} 条新新闻发送给 SmallAgent。")
+                    else:
+                        print("[NewsCollector]: 没有新新闻。")
 
         except Exception as e:
             print(f"[NewsCollector] 错误: {e}")
@@ -96,36 +97,35 @@ async def run_news_collector():
 
 # 2. 情绪采集器
 ASSETS_TO_TRACK = ["bitcoin", "ethereum"]
+DATA_OFFSET_DAYS = 35
+
 
 async def run_sentiment_collector():
     """
     后台任务:轮询 Sentiment MCP, 将原始指标 *直接* 写入数据库。
     """
-    await asyncio.sleep(15)
-    # [FIX] 更新日志以反映正确的 URL
+    await asyncio.sleep(25)
     print(f"[SentimentCollector]: 启动... (轮询 Sentiment MCP at {SENTIMENT_MCP_URL})")
 
     while True:
         try:
-            # (你的 SseTransport 和 Client 构造是正确的)
-            sentiment_transport = SSETransport(url=SENTIMENT_MCP_URL)
+            sentiment_transport = SSETransport(url=SENTIMENT_MCP_URL, sse_read_timeout=60.0)
             sentiment_client = Client(sentiment_transport, timeout=60.0)
 
             async with sentiment_client:
-                print("[SentimentCollector]: 正在拉取情绪指标...")
+                print(f"[SentimentCollector]: 正在拉取 {DATA_OFFSET_DAYS} 天前的指标...")
                 metrics_data = []
 
                 for asset in ASSETS_TO_TRACK:
                     try:
-                        # ... (其余的情绪处理逻辑保持不变) ...
                         volume_result = await asyncio.wait_for(
                             sentiment_client.call_tool(
                                 "get_social_volume",
-                                arguments={"asset": asset, "days": 1}
+                                arguments={"asset": asset, "days": 1, "offset_days": DATA_OFFSET_DAYS}
                             ),
                             timeout=30.0
                         )
-                        # ... (省略) ...
+
                         volume_text = ""
                         if hasattr(volume_result, 'content') and volume_result.content:
                             for item in volume_result.content:
@@ -137,11 +137,11 @@ async def run_sentiment_collector():
                         balance_result = await asyncio.wait_for(
                             sentiment_client.call_tool(
                                 "get_sentiment_balance",
-                                arguments={"asset": asset, "days": 1}
+                                arguments={"asset": asset, "days": 1, "offset_days": DATA_OFFSET_DAYS}
                             ),
                             timeout=30.0
                         )
-                        # ... (省略) ...
+
                         balance_text = ""
                         if hasattr(balance_result, 'content') and balance_result.content:
                             for item in balance_result.content:
@@ -155,18 +155,18 @@ async def run_sentiment_collector():
                     except Exception as tool_error:
                         print(f"[SentimentCollector] 调用工具出错 ({asset}): {tool_error}")
 
-                # ... (数据库写入逻辑保持不变) ...
                 entries_to_add = []
-                # ... (省略) ...
                 for asset, metric_type, result_str in metrics_data:
                     if not result_str:
                         print(f"[SentimentCollector] {asset} 的 {metric_type} 返回空结果")
                         continue
+
                     try:
                         if " is " in result_str:
                             value_part = result_str.split(" is ")[1]
                             value_str = value_part.split()[0].replace(",", "").rstrip(".")
                             value_float = float(value_str)
+
                             entries_to_add.append(
                                 SentimentMetrics(
                                     asset=asset,
@@ -176,7 +176,7 @@ async def run_sentiment_collector():
                             )
                             print(f"[SentimentCollector] 准备写入: {asset} - {metric_type} = {value_float}")
                         else:
-                            print(f"[SentimentCollector] 无法解析格式: {result_str}")
+                            print(f"[SentimentCollector] 无法解析格式 (API返回错误?): {result_str}")
                     except (ValueError, IndexError) as parse_error:
                         print(f"[SentimentCollector] 无法解析值: {result_str} - {parse_error}")
 
@@ -201,13 +201,14 @@ async def run_sentiment_collector():
 
         await asyncio.sleep(SENTIMENT_POLL_INTERVAL)
 
-# ... (start_all_collectors 和 __main__ 保持不变) ...
+
 async def start_all_collectors():
     """启动所有采集器"""
     await asyncio.gather(
         run_news_collector(),
         run_sentiment_collector()
     )
+
 
 if __name__ == "__main__":
     # 用于测试

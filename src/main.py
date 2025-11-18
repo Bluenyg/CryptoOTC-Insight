@@ -2,20 +2,7 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import asyncio
 import sys
-from contextlib import asynccontextmanager  # <-- [FIX] 导入
-
-# --- 1. 导入你的MCP应用实例 ---
-try:
-    from src.core.mcp_server.crypto_sentiment_mcp import mcp as sentiment_mcp_app
-    from src.core.mcp_server.crypto_news_mcp import mcp as news_mcp_app
-except ImportError as e:
-    print("=" * 50)
-    print(f"CRITICAL ERROR: Could not import MCP servers: {e}")
-    print("请确保你的文件结构是:")
-    print("src/core/mcp_server/crypto_sentiment_mcp.py")
-    print("src/core/mcp_server/crypto_news_mcp.py")
-    print("=" * 50)
-    sys.exit(1)
+from contextlib import asynccontextmanager
 
 from src.core.database import create_db_pool, close_db_pool, create_tables
 from src.agents.large_agents.scheduler import schedule_trend_agent, schedule_anomaly_agent
@@ -24,7 +11,7 @@ from src.schemas.data_models import RawDataInput
 from src.core.collectors import run_news_collector, run_sentiment_collector
 
 
-# --- [FIX] 定义新的 lifespan 处理器 ---
+# --- lifespan 保持不变 (它正确地启动了 Agent 和 Collector) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- Startup ---
@@ -53,22 +40,15 @@ async def lifespan(app: FastAPI):
 
 # --- 你的主应用 (传入 lifespan) ---
 app = FastAPI(
-    title="单一进程 MAS-Quant 系统",
-    description="运行 FastAPI, 2个MCP, 2个采集器, 2个大Agent",
-    lifespan=lifespan  # <-- [FIX] 在这里应用
+    title="MAS-Quant 系统",
+    description="运行 FastAPI,  2个采集器, 2个大Agent",
+    lifespan=lifespan
 )
 
-# --- 3. 挂载 MCP 子应用 ---
-app.mount("/sentiment", sentiment_mcp_app)
-app.mount("/news", news_mcp_app)
-print("Sentiment and News MCP servers mounted under /sentiment and /news")
+print("Main API server running on port 8000.")
 
 
-# --- 移除旧的 @app.on_event("startup") 和 @app.on_event("shutdown") ---
-
-
-# --- WebSocket 实时摄取入口 ---
-# (这个入口现在只被 run_news_collector 使用)
+# --- WebSocket 和 HTTP 路由保持不变 ---
 @app.websocket("/ws/data_ingest")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -95,7 +75,6 @@ async def websocket_endpoint(websocket: WebSocket):
         print(f"WebSocket Error: {e}")
 
 
-# --- (可选) HTTP 入口用于测试 ---
 @app.post("/http/data_ingest")
 async def http_endpoint(raw_data: RawDataInput):
     asyncio.create_task(

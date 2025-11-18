@@ -2,17 +2,17 @@
 import httpx  # <-- [FIX] 导入 httpx
 from mcp.server.fastmcp import FastMCP
 from datetime import datetime, timedelta, UTC
-# --- [FIX] 从中央配置导入 settings ---
-from config.settings import settings
 
+from dotenv import load_dotenv
+load_dotenv()
 # ---
 
-mcp = FastMCP("CryptoSentiment")
+mcp = FastMCP("CryptoSentiment",port=8002)
 
-# --- [FIX] 直接使用导入的 settings 对象 ---
-SANTIMENT_API_KEY = settings.SANTIMENT_API_KEY
+
+import os
 # ---
-
+SANTIMENT_API_KEY= os.getenv("SANTIMENT_API_KEY")
 if not SANTIMENT_API_KEY:
     raise ValueError("SANTIMENT_API_KEY not found in config/settings.py.")
 
@@ -194,6 +194,6 @@ async def get_social_dominance(asset: str, days: int = 7) -> str:
     except Exception as e:
         return f"Error fetching social dominance for {asset}: {str(e)}"
 
-# [FIX] 移除 mcp.run()。它在被 main.py 导入时不需要
-# if __name__ == "__main__":
-#     mcp.run(transport="sse", port=8002)
+#[FIX] 移除 mcp.run()。它在被 main.py 导入时不需要
+if __name__ == "__main__":
+     mcp.run(transport="sse")
