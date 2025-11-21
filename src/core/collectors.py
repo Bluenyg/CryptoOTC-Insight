@@ -1,215 +1,140 @@
 # src/core/collectors.py
 import asyncio
-# import websockets  <-- [FIX] 不再需要 websocket 库
-import json
+import httpx
 import time
-from typing import Set
+from datetime import datetime, timedelta
+from typing import Set, List, Dict, Any
 
-from fastmcp import Client
-from fastmcp.client.transports import SSETransport
-
-from src.core.database import async_session
-from src.core.models import SentimentMetrics
-
-# --- [FIX] 导入需要直接调用的组件 ---
+# 导入可以直接调用的组件 (本地直接调用，不走网络)
 from src.agents.small_agents.pipeline import small_agent_graph
 from src.schemas.data_models import RawDataInput
-# ----------------------------------
-
-from config.settings import settings
 
 # --- 配置 ---
-NEWS_MCP_URL = "http://localhost:8001/sse"
-SENTIMENT_MCP_URL = "http://localhost:8002/sse"
-# MAIN_SERVER_WS = "ws://localhost:8000/ws/data_ingest"  <-- [FIX] 不再需要
+# 外部数据源 API
+FETCH_API_URL = "http://api.ibyteai.com:15008/10Ai/dataCenter/crypto/fetchCryptoPanic"
+HEADERS = {'Content-Type': 'application/json'}
 
-NEWS_POLL_INTERVAL = 300
-SENTIMENT_POLL_INTERVAL = 300
+# 轮询间隔 (秒)
+NEWS_POLL_INTERVAL = 60
 
-# 1. 新闻采集器
-seen_article_titles: Set[str] = set()
+# 记录已处理的 objectId，防止重复处理
+seen_object_ids: Set[str] = set()
+
+
+async def fetch_crypto_news_from_api(client: httpx.AsyncClient, coin_type: int) -> List[Dict[str, Any]]:
+    """
+    调用 fetchCryptoPanic 接口获取新闻
+    coin_type: 1 (BTC), 2 (ETH)
+    """
+    # 获取过去 24 小时的数据
+    end_time = datetime.now()
+    start_time = end_time - timedelta(hours=24)
+
+    # 构造请求体
+    json_data = {
+        "type": coin_type,
+        "startTime": start_time.strftime("%Y-%m-%d %H:%M:%S"),
+        "endTime": end_time.strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+    try:
+        response = await client.post(FETCH_API_URL, headers=HEADERS, json=json_data, timeout=15.0)
+
+        if response.status_code != 200:
+            print(f"[NewsCollector] API 请求失败 (Type {coin_type}) Code: {response.status_code}")
+            return []
+
+        # 接口返回的是 JSON 列表
+        return response.json()
+    except Exception as e:
+        print(f"[NewsCollector] 请求异常 (Type {coin_type}): {e}")
+        return []
 
 
 async def run_news_collector():
     """
-    后台任务:轮询 News MCP, 并直接调用 Small Agent 进行处理 (不再走 WebSocket)。
+    后台任务: 轮询外部 API 获取新闻，并直接发送给 Small Agent 进行处理。
     """
-    await asyncio.sleep(10)
-    print(f"[NewsCollector]: 启动... (轮询 News MCP at {NEWS_MCP_URL})")
+    # 启动延迟，等待其他组件加载
+    await asyncio.sleep(5)
+    print(f"[NewsCollector]: 启动... (Target API: {FETCH_API_URL})")
 
-    while True:
-        try:
-            news_transport = SSETransport(url=NEWS_MCP_URL, sse_read_timeout=60.0)
-            news_client = Client(news_transport, timeout=15.0)
+    async with httpx.AsyncClient() as client:
+        while True:
+            try:
+                # 1. 拉取数据
+                all_news_items = []
 
-            async with news_client:
-                print("[NewsCollector]: 正在拉取新闻...")
-                result = await news_client.call_tool(
-                    "get_latest_news",
-                    arguments={}
-                )
+                # 并行拉取 BTC 和 ETH 新闻
+                # (由于 API 是独立的，顺序调用或并发调用皆可，这里用顺序调用简单稳定)
+                btc_news = await fetch_crypto_news_from_api(client, 1)
+                eth_news = await fetch_crypto_news_from_api(client, 2)
 
-                news_blob = ""
-                if hasattr(result, 'content') and result.content:
-                    for item in result.content:
-                        if hasattr(item, 'text'):
-                            news_blob += item.text
+                if isinstance(btc_news, list): all_news_items.extend(btc_news)
+                if isinstance(eth_news, list): all_news_items.extend(eth_news)
 
-                if news_blob and news_blob != "No recent news available.":
-                    articles = news_blob.strip().split('\n')
-                    new_articles_count = 0
+                new_count = 0
 
-                    for article_line in articles:
-                        if " (Published: " in article_line:
-                            title = article_line.split(" (Published: ")[0]
-                            if title not in seen_article_titles:
-                                new_articles_count += 1
-                                seen_article_titles.add(title)
+                # 2. 处理数据
+                for item in all_news_items:
+                    # 获取唯一标识
+                    obj_id = item.get('objectId')
 
-                                # --- [FIX] 直接构造数据对象 ---
-                                raw_data = RawDataInput(
-                                    source="mcp-news",
-                                    timestamp=time.time(),
-                                    content=article_line
-                                )
-
-                                # --- [FIX] 直接调用 Agent (内部函数调用) ---
-                                # 这里的 ainvoke 是异步的，会在后台处理
-                                asyncio.create_task(
-                                    small_agent_graph.ainvoke({"raw_data": raw_data})
-                                )
-
-                    if new_articles_count > 0:
-                        print(f"[NewsCollector]: 已将 {new_articles_count} 条新新闻发送给 SmallAgent。")
-                    else:
-                        print("[NewsCollector]: 没有新新闻。")
-
-        except Exception as e:
-            print(f"[NewsCollector] 错误: {e}")
-            import traceback
-            traceback.print_exc()
-            print("[NewsCollector]: 等待60秒后重试...")
-            await asyncio.sleep(60)
-            continue
-
-        await asyncio.sleep(NEWS_POLL_INTERVAL)
-
-
-# 2. 情绪采集器
-ASSETS_TO_TRACK = ["bitcoin", "ethereum"]
-DATA_OFFSET_DAYS = 35
-
-
-async def run_sentiment_collector():
-    """
-    后台任务:轮询 Sentiment MCP, 将原始指标 *直接* 写入数据库。
-    """
-    await asyncio.sleep(25)
-    print(f"[SentimentCollector]: 启动... (轮询 Sentiment MCP at {SENTIMENT_MCP_URL})")
-
-    while True:
-        try:
-            sentiment_transport = SSETransport(url=SENTIMENT_MCP_URL, sse_read_timeout=60.0)
-            sentiment_client = Client(sentiment_transport, timeout=60.0)
-
-            async with sentiment_client:
-                print(f"[SentimentCollector]: 正在拉取 {DATA_OFFSET_DAYS} 天前的指标...")
-                metrics_data = []
-
-                for asset in ASSETS_TO_TRACK:
-                    try:
-                        volume_result = await asyncio.wait_for(
-                            sentiment_client.call_tool(
-                                "get_social_volume",
-                                arguments={"asset": asset, "days": 1, "offset_days": DATA_OFFSET_DAYS}
-                            ),
-                            timeout=30.0
-                        )
-
-                        volume_text = ""
-                        if hasattr(volume_result, 'content') and volume_result.content:
-                            for item in volume_result.content:
-                                if hasattr(item, 'text'):
-                                    volume_text += item.text
-                        if volume_text:
-                            metrics_data.append((asset, "social_volume", volume_text))
-
-                        balance_result = await asyncio.wait_for(
-                            sentiment_client.call_tool(
-                                "get_sentiment_balance",
-                                arguments={"asset": asset, "days": 1, "offset_days": DATA_OFFSET_DAYS}
-                            ),
-                            timeout=30.0
-                        )
-
-                        balance_text = ""
-                        if hasattr(balance_result, 'content') and balance_result.content:
-                            for item in balance_result.content:
-                                if hasattr(item, 'text'):
-                                    balance_text += item.text
-                        if balance_text:
-                            metrics_data.append((asset, "sentiment_balance", balance_text))
-
-                    except asyncio.TimeoutError:
-                        print(f"[SentimentCollector] 工具调用超时 ({asset})")
-                    except Exception as tool_error:
-                        print(f"[SentimentCollector] 调用工具出错 ({asset}): {tool_error}")
-
-                entries_to_add = []
-                for asset, metric_type, result_str in metrics_data:
-                    if not result_str:
-                        print(f"[SentimentCollector] {asset} 的 {metric_type} 返回空结果")
+                    # [优化] 检查 newsTag
+                    # 如果 newsTag 已经不为 0 (说明已被处理过)，则跳过，避免重复消耗 Token
+                    # 假设 API 返回的数据包含 newsTag 字段
+                    current_tag = item.get('newsTag', 0)
+                    if current_tag and current_tag != 0:
                         continue
 
-                    try:
-                        if " is " in result_str:
-                            value_part = result_str.split(" is ")[1]
-                            value_str = value_part.split()[0].replace(",", "").rstrip(".")
-                            value_float = float(value_str)
+                    # 如果是新数据
+                    if obj_id and obj_id not in seen_object_ids:
+                        seen_object_ids.add(obj_id)
+                        new_count += 1
 
-                            entries_to_add.append(
-                                SentimentMetrics(
-                                    asset=asset,
-                                    metric_name=f"{metric_type}_{asset}",
-                                    value=value_float
-                                )
-                            )
-                            print(f"[SentimentCollector] 准备写入: {asset} - {metric_type} = {value_float}")
-                        else:
-                            print(f"[SentimentCollector] 无法解析格式 (API返回错误?): {result_str}")
-                    except (ValueError, IndexError) as parse_error:
-                        print(f"[SentimentCollector] 无法解析值: {result_str} - {parse_error}")
+                        # 组合标题和内容
+                        title = item.get('title', '')
+                        content = item.get('content', '')  # 或者是 'description'，看具体返回
+                        full_text = f"Title: {title}\nContent: {content}"
 
-                if entries_to_add:
-                    try:
-                        async with async_session() as session:
-                            async with session.begin():
-                                session.add_all(entries_to_add)
-                        print(f"[SentimentCollector]: {len(entries_to_add)} 个指标批量写入数据库完成。")
-                    except Exception as db_error:
-                        print(f"[SentimentCollector] 数据库批量写入错误: {db_error}")
-                else:
-                    print("[SentimentCollector]: 没有可写入数据库的新指标。")
+                        # 构造输入数据模型
+                        raw_data = RawDataInput(
+                            source="api-crypto-panic",
+                            timestamp=time.time(),
+                            content=full_text,
+                            object_id=obj_id  # [关键] 传递 ID 给 Pipeline 以便回写
+                        )
 
-        except Exception as e:
-            print(f"[SentimentCollector] 错误: {e}")
-            import traceback
-            traceback.print_exc()
-            print("[SentimentCollector]: 等待60秒后重试...")
-            await asyncio.sleep(60)
-            continue
+                        # 3. 直接调用 Pipeline (逐条处理，防止并发过高)
+                        try:
+                            # 使用 await 确保按顺序处理，减轻系统压力
+                            await small_agent_graph.ainvoke({"raw_data": raw_data})
+                            # 小睡一下，释放事件循环给其他任务
+                            await asyncio.sleep(0.1)
+                        except Exception as agent_e:
+                            print(f"[NewsCollector] Agent处理错误 (ID: {obj_id}): {agent_e}")
 
-        await asyncio.sleep(SENTIMENT_POLL_INTERVAL)
+                if new_count > 0:
+                    print(f"[NewsCollector]: 本轮获取并处理了 {new_count} 条新新闻。")
+
+            except Exception as e:
+                print(f"[NewsCollector] 循环发生未知错误: {e}")
+                # 发生错误时多等待一会儿
+                await asyncio.sleep(10)
+
+            # 等待下一次轮询
+            await asyncio.sleep(NEWS_POLL_INTERVAL)
 
 
 async def start_all_collectors():
     """启动所有采集器"""
+    # 目前只运行新闻采集器，因为情绪 MCP 已被移除
+    # 如果未来有新的 API 来源获取情绪数据，可以在这里添加 run_sentiment_collector()
     await asyncio.gather(
         run_news_collector(),
-        run_sentiment_collector()
     )
 
 
 if __name__ == "__main__":
-    # 用于测试
+    # 用于单独测试 collectors.py
     asyncio.run(start_all_collectors())
