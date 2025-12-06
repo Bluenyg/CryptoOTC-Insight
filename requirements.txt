@@ -16,3 +16,5 @@ pydantic_settings
 httpx
 sqlalchemy
 aiosqlite
+crawl4ai
+#playwright install ,crawl4ai基于playwright

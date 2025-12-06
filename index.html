@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>智行酒店 Pro - 完整交互版</title>
+    <style>
+        /* --- 1. 全局样式 (System Design) --- */
+        :root {
+            --primary: #2563eb;
+            --primary-light: #eff6ff;
+            --text-main: #111827;
+            --text-sub: #6b7280;
+            --bg-body: #f9fafb;
+            --white: #ffffff;
+            --border: #e5e7eb;
+            --danger: #ef4444;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --radius: 12px;
+            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-tap-highlight-color: transparent; }
+
+        body { background-color: var(--bg-body); color: var(--text-main); max-width: 480px; margin: 0 auto; min-height: 100vh; padding-bottom: 80px; /* 留出底部导航空间 */ position: relative; overflow-x: hidden; box-shadow: 0 0 20px rgba(0,0,0,0.05); }
+
+        /* --- 2. 导航栏 --- */
+        .navbar { background: var(--white); padding: 15px; position: sticky; top: 0; z-index: 50; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); }
+        .nav-title { font-weight: 700; font-size: 17px; }
+        .back-icon { font-size: 20px; padding-right: 15px; cursor: pointer; }
+
+        /* --- 3. 页面容器与转场 --- */
+        .page { display: none; padding: 15px; animation: slideUp 0.3s ease-out; }
+        .page.active { display: block; }
+        @keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* --- 4. 组件库 --- */
+        .card { background: var(--white); border-radius: var(--radius); padding: 16px; margin-bottom: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+        .btn { width: 100%; padding: 14px; border: none; border-radius: 8px; background: var(--primary); color: white; font-weight: 600; font-size: 16px; cursor: pointer; transition: 0.2s; }
+        .btn:active { transform: scale(0.98); }
+        .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text-main); }
+        .btn-danger { background: var(--danger); }
+        .btn-small { padding: 6px 12px; font-size: 13px; width: auto; }
+
+        .tag { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 12px; margin-right: 5px; background: #f3f4f6; color: var(--text-sub); }
+        .tag.blue { background: var(--primary-light); color: var(--primary); }
+
+        /* 输入框组 */
+        .input-group { margin-bottom: 15px; }
+        .input-group label { display: block; font-size: 13px; color: var(--text-sub); margin-bottom: 6px; }
+        .input-box { width: 100%; padding: 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 15px; background: var(--white); outline: none; }
+        .input-box:focus { border-color: var(--primary); }
+
+        /* --- 5. 底部导航栏 (Bottom Tab Bar) --- */
+        .tab-bar { position: fixed; bottom: 0; left: 0; right: 0; max-width: 480px; margin: 0 auto; background: var(--white); border-top: 1px solid var(--border); display: flex; justify-content: space-around; padding: 10px 0; z-index: 100; }
+        .tab-item { display: flex; flex-direction: column; align-items: center; color: var(--text-sub); font-size: 10px; cursor: pointer; flex: 1; }
+        .tab-item.active { color: var(--primary); }
+        .tab-icon { font-size: 20px; margin-bottom: 2px; }
+
+        /* --- 6. 弹窗 (Modals) --- */
+        .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 200; display: none; align-items: flex-end; }
+        .modal-overlay.show { display: flex; }
+        .bottom-sheet { background: var(--white); width: 100%; border-radius: 20px 20px 0 0; padding: 20px; max-width: 480px; margin: 0 auto; animation: slideUpModal 0.3s; max-height: 80vh; overflow-y: auto; }
+        @keyframes slideUpModal { from { transform: translateY(100%); } to { transform: translateY(0); } }
+
+        /* --- 特定页面样式 --- */
+
+        /* 搜索筛选 */
+        .filter-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 15px; }
+        .filter-btn { padding: 8px; text-align: center; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; cursor: pointer; }
+        .filter-btn.selected { border-color: var(--primary); color: var(--primary); background: var(--primary-light); }
+
+        /* 酒店列表 */
+        .hotel-item { display: flex; gap: 12px; }
+        .hotel-thumb { width: 100px; height: 110px; border-radius: 8px; object-fit: cover; background: #eee; }
+        .hotel-content { flex: 1; display: flex; flex-direction: column; justify-content: space-between; }
+        .price-text { color: var(--danger); font-size: 18px; font-weight: 700; }
+
+        /* 详情页 */
+        .gallery { display: flex; overflow-x: auto; gap: 10px; padding-bottom: 10px; scroll-snap-type: x mandatory; }
+        .gallery img { width: 280px; height: 180px; border-radius: 8px; scroll-snap-align: center; object-fit: cover; }
+        .map-preview { height: 80px; background: #e5e7eb; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--text-sub); font-size: 12px; margin: 10px 0; }
+
+        /* 订单状态 */
+        .order-status { font-size: 14px; font-weight: bold; }
+        .status-unpaid { color: var(--danger); }
+        .status-paid { color: var(--success); }
+        .status-refunded { color: var(--text-sub); text-decoration: line-through; }
+
+        /* Toast 提示 */
+        #toast { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.8); color: white; padding: 12px 24px; border-radius: 8px; font-size: 14px; z-index: 1000; display: none; text-align: center; }
+
+    </style>
+</head>
+<body>
+
+    <nav class="navbar" id="navbar">
+        <div class="back-icon" onclick="history.back()" id="nav-back" style="display:none;">&#8592;</div>
+        <div class="nav-title" id="nav-title">智行酒店</div>
+        <div style="font-size: 20px;">&#8942;</div>
+    </nav>
+
+    <div id="app-content">
+
+        <div id="page-home" class="page active">
+            <div class="card" style="background: linear-gradient(135deg, #2563eb, #1d4ed8); color: white; border:none;">
+                <h2>开启您的旅程 🌍</h2>
+                <p style="opacity: 0.9; font-size: 13px; margin-top: 5px;">全网比价 · 智能推荐 · 无忧退改</p>
+            </div>
+
+            <div class="card">
+                <div class="input-group" style="border-bottom: 1px solid #f3f4f6; padding-bottom: 10px;">
+                    <label>目的地</label>
+                    <div style="font-size: 18px; font-weight: 600;">北京市, 朝阳区 <span style="font-size:12px; color:gray; font-weight:normal;">📍 定位中</span></div>
+                </div>
+
+                <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                    <div style="flex: 1;">
+                        <label style="font-size:12px; color:gray;">入住</label>
+                        <div style="font-weight:600;">11月25日 <span style="font-size:12px; color:gray;">周一</span></div>
+                    </div>
+                    <div style="flex: 1; border-left: 1px solid #eee; padding-left: 10px;">
+                        <label style="font-size:12px; color:gray;">离店</label>
+                        <div style="font-weight:600;">11月26日 <span style="font-size:12px; color:gray;">周二</span></div>
+                    </div>
+                </div>
+
+                <div class="input-group">
+                    <label>筛选偏好 (价格/星级)</label>
+                    <input type="text" class="input-box" placeholder="¥0-500, 三星/舒适" readonly onclick="showFilterModal()">
+                </div>
+
+                <button class="btn" onclick="router.push('page-list')">🔍 立即搜索</button>
+            </div>
+
+            <div style="padding: 0 5px;">
+                <h3 style="font-size: 15px; margin-bottom: 10px;">当季特惠 🔥</h3>
+                <div style="display: flex; overflow-x: scroll; gap: 10px; padding-bottom: 10px;">
+                    <div style="min-width: 140px; background: white; border-radius: 8px; padding: 10px;">
+                        <div style="height: 80px; background: #eee; border-radius: 6px; margin-bottom: 5px;"></div>
+                        <div style="font-size: 13px; font-weight: bold;">情侣度假套票</div>
+                        <div style="color: var(--danger); font-size: 12px;">¥699 起</div>
+                    </div>
+                    <div style="min-width: 140px; background: white; border-radius: 8px; padding: 10px;">
+                        <div style="height: 80px; background: #eee; border-radius: 6px; margin-bottom: 5px;"></div>
+                        <div style="font-size: 13px; font-weight: bold;">亲子乐园房</div>
+                        <div style="color: var(--danger); font-size: 12px;">¥899 起</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="page-list" class="page">
+            <div style="display: flex; gap: 10px; margin-bottom: 10px; position: sticky; top: 0; background: var(--bg-body); padding: 5px 0; z-index: 10;">
+                <button class="btn-outline btn-small" style="background:white;">综合排序 ▾</button>
+                <button class="btn-outline btn-small" style="background:white;">价格最低</button>
+                <button class="btn-outline btn-small" style="background:white;">距离最近</button>
+                <button class="btn-outline btn-small" style="background:white;">筛选 ▾</button>
+            </div>
+
+            <div class="card hotel-item" onclick="router.push('page-detail', {name: '北京国贸大酒店', price: 1288})">
+                <img src="https://placehold.co/100x110/2563eb/white?text=Hotel+A" class="hotel-thumb">
+                <div class="hotel-content">
+                    <div>
+                        <div style="font-weight: bold; font-size: 16px;">北京国贸大酒店</div>
+                        <div style="font-size: 12px; color: var(--text-sub); margin: 4px 0;">📍 建国门外大街 | 距地铁200米</div>
+                        <div style="font-size: 12px; color: var(--primary);">💎 豪华型 · 4.9分 (2300评价)</div>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: flex-end;">
+                        <div class="tag">商务出行</div>
+                        <div class="price-text">¥1288</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card hotel-item" onclick="router.push('page-detail', {name: '亚朵S酒店 (CBD店)', price: 650})">
+                <img src="https://placehold.co/100x110/10b981/white?text=Hotel+B" class="hotel-thumb">
+                <div class="hotel-content">
+                    <div>
+                        <div style="font-weight: bold; font-size: 16px;">亚朵S酒店 (CBD店)</div>
+                        <div style="font-size: 12px; color: var(--text-sub); margin: 4px 0;">📍 双井 | 免费停车</div>
+                        <div style="font-size: 12px; color: var(--primary);">✨ 高档型 · 4.8分 (5000+评价)</div>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: flex-end;">
+                        <div class="tag">性价比</div>
+                        <div class="price-text">¥650</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="page-detail" class="page">
+            <div class="gallery">
+                <img src="https://placehold.co/280x180/2563eb/white?text=Lobby" alt="大堂">
+                <img src="https://placehold.co/280x180/2563eb/white?text=Room" alt="客房">
+                <img src="https://placehold.co/280x180/2563eb/white?text=Pool" alt="泳池">
+            </div>
+
+            <div class="card">
+                <h2 id="detail-name" style="margin-bottom: 5px;">酒店名称</h2>
+                <div style="font-size: 12px; color: var(--text-sub); display: flex; align-items: center; gap: 5px;">
+                    <span>⭐⭐⭐⭐⭐</span>
+                    <span>“服务态度超好”</span>
+                    <span>“早餐丰富”</span>
+                </div>
+                <div class="map-preview">🗺️ 查看地图与周边 (距您直线1.5km)</div>
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn-outline btn-small" style="flex:1;">💬 联系客服</button>
+                    <button class="btn-outline btn-small" style="flex:1;">⭐ 收藏</button>
+                </div>
+            </div>
+
+            <h3 style="font-size: 16px; margin: 15px 5px;">房型选择</h3>
+
+            <div class="card" style="display: flex; justify-content: space-between; align-items: center;">
+                <div style="flex: 1;">
+                    <div style="font-weight: bold;">豪华大床房</div>
+                    <div style="font-size: 12px; color: var(--text-sub); margin-top: 4px;">35㎡ | 双早 | 有窗 | 浴缸</div>
+                    <div style="font-size: 12px; color: var(--warning); margin-top: 2px;">不可取消</div>
+                </div>
+                <div style="text-align: right;">
+                    <div class="price-text" id="room-price-1">¥0</div>
+                    <button class="btn btn-small" style="margin-top: 5px;" onclick="router.push('page-booking', {roomType: '豪华大床房'})">预订</button>
+                </div>
+            </div>
+             <div class="card" style="display: flex; justify-content: space-between; align-items: center;">
+                <div style="flex: 1;">
+                    <div style="font-weight: bold;">行政套房</div>
+                    <div style="font-size: 12px; color: var(--text-sub); margin-top: 4px;">60㎡ | 行政礼遇 | 高层视野</div>
+                    <div style="font-size: 12px; color: var(--success); margin-top: 2px;">限时免费取消</div>
+                </div>
+                <div style="text-align: right;">
+                    <div class="price-text" id="room-price-2">¥0</div>
+                    <button class="btn btn-small" style="margin-top: 5px;" onclick="router.push('page-booking', {roomType: '行政套房'})">预订</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="page-booking" class="page">
+            <div class="card" style="background: var(--primary-light);">
+                <div style="font-size: 12px; color: var(--primary);">⏱️ 房间紧张，请在 15:00 分钟内完成支付</div>
+            </div>
+
+            <div class="card">
+                <h3 id="book-hotel" style="margin-bottom: 5px;"></h3>
+                <div id="book-room" style="font-size: 14px; color: var(--text-sub);"></div>
+                <div style="font-size: 13px; margin-top: 10px; display: flex; justify-content: space-between;">
+                    <span>入住: 11-25</span>
+                    <span>离店: 11-26</span>
+                    <span>1晚</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="input-group">
+                    <label>住客姓名</label>
+                    <input type="text" class="input-box" value="张三" placeholder="填写入住人姓名">
+                </div>
+                <div class="input-group" style="margin-bottom: 0;">
+                    <label>联系手机</label>
+                    <input type="tel" class="input-box" value="13800138000" placeholder="接收确认短信">
+                </div>
+            </div>
+
+            <div class="card">
+                <div style="display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #eee;" onclick="showCouponModal()">
+                    <span>🧧 优惠福利</span>
+                    <span style="color: var(--danger); cursor: pointer;">-¥50 优惠券 ></span>
+                </div>
+                <div style="display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #eee;" onclick="showPolicyModal()">
+                    <span>📜 退订政策</span>
+                    <span style="color: var(--primary); cursor: pointer;">查看规则 ></span>
+                </div>
+                <div style="display: flex; justify-content: space-between; padding: 10px 0;">
+                    <span>发票</span>
+                    <span style="color: var(--text-sub);">如需发票请在前台领取</span>
+                </div>
+            </div>
+
+            <div style="position: fixed; bottom: 0; left: 0; right: 0; background: white; padding: 10px 15px; border-top: 1px solid #eee; display: flex; align-items: center; justify-content: space-between; z-index: 60; max-width: 480px; margin: 0 auto;">
+                <div>
+                    <span style="font-size: 12px; color: gray;">总计消费:</span>
+                    <span class="price-text" id="final-price">¥0</span>
+                </div>
+                <button class="btn" style="width: auto; padding: 10px 30px;" onclick="processPayment()">提交订单</button>
+            </div>
+        </div>
+
+        <div id="page-orders" class="page">
+            <h2 style="margin-bottom: 15px;">我的订单</h2>
+
+            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                <span class="tag blue">全部</span>
+                <span class="tag">待入住</span>
+                <span class="tag">待评价</span>
+                <span class="tag">退款/售后</span>
+            </div>
+
+            <div id="order-list-container">
+                <div style="text-align: center; color: gray; padding-top: 50px;">
+                    暂无新订单，去预订一个吧！
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <div class="tab-bar">
+        <div class="tab-item active" onclick="switchTab('home')">
+            <div class="tab-icon">🏠</div>
+            <div>首页</div>
+        </div>
+        <div class="tab-item" onclick="switchTab('list')">
+            <div class="tab-icon">🔍</div>
+            <div>搜索</div>
+        </div>
+        <div class="tab-item" onclick="switchTab('orders')">
+            <div class="tab-icon">🧾</div>
+            <div>订单</div>
+        </div>
+        <div class="tab-item">
+            <div class="tab-icon">👤</div>
+            <div>我的</div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="filter-modal" onclick="closeModal('filter-modal')">
+        <div class="bottom-sheet" onclick="event.stopPropagation()">
+            <h3>更多筛选</h3>
+            <label style="margin-top:15px; display:block;">价格区间</label>
+            <input type="range" style="width:100%; margin: 10px 0;" min="0" max="2000">
+            <div style="display:flex; justify-content:space-between; font-size:12px; color:gray;">
+                <span>¥0</span><span>¥2000+</span>
+            </div>
+
+            <label style="margin-top:15px; display:block; margin-bottom:10px;">星级服务</label>
+            <div class="filter-grid">
+                <div class="filter-btn">经济型</div>
+                <div class="filter-btn selected">舒适/三星</div>
+                <div class="filter-btn">高档/四星</div>
+                <div class="filter-btn">豪华/五星</div>
+            </div>
+            <button class="btn" onclick="closeModal('filter-modal')">确认筛选</button>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="policy-modal" onclick="closeModal('policy-modal')">
+        <div class="bottom-sheet" onclick="event.stopPropagation()">
+            <h3>退订政策 (Rule)</h3>
+            <div style="margin: 20px 0; font-size: 14px; line-height: 1.6; color: var(--text-sub);">
+                <p>1. <strong>免费取消：</strong> 入住当天 18:00 前可免费取消。</p>
+                <p>2. <strong>扣费规则：</strong> 超过时间取消，将扣除首晚房费作为违约金。</p>
+                <p>3. <strong>突发情况：</strong> 如遇不可抗力（如自然灾害），请联系客服申请全额退款。</p>
+            </div>
+            <button class="btn" onclick="closeModal('policy-modal')">我知道了</button>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="coupon-modal" onclick="closeModal('coupon-modal')">
+        <div class="bottom-sheet" onclick="event.stopPropagation()">
+            <h3>选择优惠券</h3>
+            <div class="card" style="border: 1px solid var(--danger); background: #fff5f5; margin-top: 15px;">
+                <div style="font-weight: bold; color: var(--danger);">¥50 新人专享券</div>
+                <div style="font-size: 12px; color: gray;">满500可用，有效期至年底</div>
+            </div>
+            <button class="btn" onclick="closeModal('coupon-modal')">确认使用</button>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="review-modal" onclick="closeModal('review-modal')">
+        <div class="bottom-sheet" onclick="event.stopPropagation()">
+            <h3>入住评价</h3>
+            <div style="font-size: 24px; text-align: center; margin: 15px 0;">⭐⭐⭐⭐⭐</div>
+            <textarea class="input-box" rows="4" placeholder="分享您的入住体验..."></textarea>
+            <button class="btn" style="margin-top: 10px;" onclick="submitReview()">提交评价</button>
+        </div>
+    </div>
+
+    <div id="toast">提示信息</div>
+
+    <script>
+        // --- 全局数据 Store ---
+        const state = {
+            currentHotel: { name: '', price: 0 },
+            currentRoom: { name: '', price: 0 },
+            orders: [], // 存储订单对象：{ id, hotel, room, price, status, date }
+            // status: 'upcoming' (待入住), 'completed' (已完成), 'refunded' (已退款)
+        };
+
+        // --- 路由与导航系统 ---
+        const router = {
+            push: function(pageId, data = {}) {
+                // 传参处理
+                if(data.name) state.currentHotel = { ...state.currentHotel, ...data };
+                if(data.price) state.currentHotel.price = data.price;
+                if(data.roomType) {
+                    state.currentRoom.name = data.roomType;
+                    // 简单的价格逻辑：套房加价
+                    state.currentRoom.price = data.roomType.includes('套房') ? state.currentHotel.price + 600 : state.currentHotel.price;
+                }
+
+                // 渲染页面数据
+                renderPage(pageId);
+
+                // 切换视图
+                document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+                document.getElementById(pageId).classList.add('active');
+
+                // 更新顶部导航状态
+                document.getElementById('nav-back').style.display = pageId === 'page-home' ? 'none' : 'block';
+                if(pageId === 'page-home') document.getElementById('navbar').style.display = 'none'; // 首页沉浸式
+                else document.getElementById('navbar').style.display = 'flex';
+
+                window.scrollTo(0,0);
+            }
+        };
+
+        // Tab 切换逻辑
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab-item').forEach(t => t.classList.remove('active'));
+            event.currentTarget.classList.add('active');
+
+            if (tabName === 'home') router.push('page-home');
+            if (tabName === 'list') router.push('page-list');
+            if (tabName === 'orders') {
+                renderOrderList();
+                router.push('page-orders');
+            }
+        }
+
+        // --- 页面渲染逻辑 ---
+        function renderPage(pageId) {
+            if (pageId === 'page-detail') {
+                document.getElementById('detail-name').innerText = state.currentHotel.name;
+                document.getElementById('room-price-1').innerText = `¥${state.currentHotel.price}`;
+                document.getElementById('room-price-2').innerText = `¥${state.currentHotel.price + 600}`;
+            }
+            if (pageId === 'page-booking') {
+                document.getElementById('book-hotel').innerText = state.currentHotel.name;
+                document.getElementById('book-room').innerText = state.currentRoom.name;
+                // 减去优惠券50
+                document.getElementById('final-price').innerText = `¥${state.currentRoom.price - 50}`;
+            }
+        }
+
+        // --- 核心业务逻辑：支付与生成订单 ---
+        function processPayment() {
+            showToast("正在请求支付网关...");
+            setTimeout(() => {
+                showToast("支付成功！短信确认已发送 ✅");
+
+                // 创建新订单
+                const newOrder = {
+                    id: 'H' + Date.now().toString().slice(-6),
+                    hotel: state.currentHotel.name,
+                    room: state.currentRoom.name,
+                    price: state.currentRoom.price - 50,
+                    status: 'upcoming', // 初始状态：待入住
+                    date: new Date().toLocaleDateString()
+                };
+                state.orders.unshift(newOrder); // 加入列表头部
+
+                // 跳转到订单页
+                setTimeout(() => {
+                    switchTab('orders'); // 自动切换 tab 样式
+                    renderOrderList();
+                    router.push('page-orders');
+                }, 1000);
+            }, 1500);
+        }
+
+        // --- 核心业务逻辑：订单列表渲染 (包含售后操作) ---
+        function renderOrderList() {
+            const container = document.getElementById('order-list-container');
+            container.innerHTML = '';
+
+            if (state.orders.length === 0) {
+                container.innerHTML = '<div style="text-align: center; color: gray; padding-top: 50px;">暂无订单</div>';
+                return;
+            }
+
+            state.orders.forEach((order, index) => {
+                // 根据状态生成不同的按钮
+                let actionButtons = '';
+                let statusText = '';
+                let statusClass = '';
+
+                if (order.status === 'upcoming') {
+                    statusText = '待入住';
+                    statusClass = 'status-paid';
+                    // 对应流程图：日程提醒、自身突发情况(退款)
+                    actionButtons = `
+                        <button class="btn-outline btn-small" onclick="addToCalendar()">📅 添加到日历</button>
+                        <button class="btn-outline btn-small" style="color:var(--danger); border-color:var(--danger);" onclick="applyRefund(${index})">退款/取消</button>
+                        <button class="btn btn-small" onclick="checkInAction()">办理入住</button>
+                    `;
+                } else if (order.status === 'refunded') {
+                    statusText = '已退款';
+                    statusClass = 'status-refunded';
+                    actionButtons = `<button class="btn-outline btn-small" disabled>订单已关闭</button>`;
+                } else if (order.status === 'completed') {
+                    statusText = '已完成';
+                    statusClass = 'status-paid';
+                    // 对应流程图：入住评价
+                    actionButtons = `<button class="btn btn-small" onclick="openReviewModal()">✍️ 写评价</button>`;
+                }
+
+                const html = `
+                    <div class="card">
+                        <div style="display:flex; justify-content:space-between; margin-bottom:10px; border-bottom:1px solid #eee; padding-bottom:10px;">
+                            <span style="font-size:12px; color:gray;">订单号: ${order.id}</span>
+                            <span class="${statusClass}">${statusText}</span>
+                        </div>
+                        <div style="display:flex; gap:10px;">
+                            <div style="width:60px; height:60px; background:#eee; border-radius:6px;"></div>
+                            <div>
+                                <div style="font-weight:bold;">${order.hotel}</div>
+                                <div style="font-size:12px; color:gray;">${order.room}</div>
+                                <div style="font-size:12px; color:gray;">${order.date}</div>
+                            </div>
+                        </div>
+                        <div style="margin-top:15px; display:flex; justify-content:flex-end; gap:8px;">
+                            ${actionButtons}
+                        </div>
+                    </div>
+                `;
+                container.innerHTML += html;
+            });
+        }
+
+        // --- 售后操作交互 ---
+
+        // 1. 退款流程 (对应：自身突发情况 -> 是 -> 提前退款)
+        function applyRefund(index) {
+            if(confirm("确定要申请退款吗？根据政策，将原路退回支付账户。")) {
+                showToast("退款申请提交成功，审核中...");
+                setTimeout(() => {
+                    state.orders[index].status = 'refunded';
+                    renderOrderList(); // 重新渲染状态
+                    showToast("资金已退回 (模拟)");
+                }, 1000);
+            }
+        }
+
+        // 2. 添加入住日历 (对应：日程提醒)
+        function addToCalendar() {
+            showToast("已添加至系统日历 📅");
+        }
+
+        // 3. 模拟入住 (对应：到店入住)
+        function checkInAction() {
+            showToast("欢迎入住！模拟行程结束");
+            // 简单处理：将第一条待入住改为已完成，方便展示评价功能
+            const targetIndex = state.orders.findIndex(o => o.status === 'upcoming');
+            if(targetIndex !== -1) {
+                state.orders[targetIndex].status = 'completed';
+                setTimeout(() => renderOrderList(), 1000);
+            }
+        }
+
+        // 4. 评价流程 (对应：入住评价)
+        function openReviewModal() {
+            document.getElementById('review-modal').classList.add('show');
+        }
+        function submitReview() {
+            closeModal('review-modal');
+            showToast("评价发布成功！感谢反馈");
+        }
+
+        // --- 弹窗与辅助功能 ---
+        function showFilterModal() { document.getElementById('filter-modal').classList.add('show'); }
+        function showPolicyModal() { document.getElementById('policy-modal').classList.add('show'); }
+        function showCouponModal() { document.getElementById('coupon-modal').classList.add('show'); }
+
+        function closeModal(id) {
+            document.getElementById(id).classList.remove('show');
+        }
+
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            toast.innerText = msg;
+            toast.style.display = 'block';
+            setTimeout(() => toast.style.display = 'none', 2000);
+        }
+
+        // 浏览器后退键处理
+        window.onpopstate = function() {
+            const active = document.querySelector('.page.active');
+            if(active.id !== 'page-home') {
+                router.push('page-home'); // 简单处理：统一回首页
+            }
+        };
+
+    </script>
+</body>
+</html>

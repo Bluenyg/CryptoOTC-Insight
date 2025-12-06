@@ -7,9 +7,13 @@ from config.settings import settings
 from typing import Literal
 
 # 1. 定义一个更强大的LLM，用于分析
-analysis_llm = ChatOpenAI(api_key=settings.OPENAI_API_KEY, base_url=settings.OPENAI_BASE_URL,model="qwen-flash")
+analysis_llm = ChatOpenAI(
+    api_key=settings.OPENAI_API_KEY,
+    base_url=settings.OPENAI_BASE_URL,
+    model="qwen-flash"
+)
 
-# 2. 定义分析链的 LLM 输出结构 (注意：这里不需要 object_id，因为这是 LLM 生成的内容)
+# 2. 定义分析链的 LLM 输出结构
 class NLPAnalysisOutput(BaseModel):
     """分析加密货币新闻或社交媒体帖子。"""
     summary: str = Field(..., description="用中文总结的核心信息，150字以内。")
@@ -42,9 +46,9 @@ async def run_nlp_agent(raw_data: RawDataInput) -> ProcessedData | None:
             "source": raw_data.source
         })
 
-        # 2. [FIX] 在这里实例化 ProcessedData 时，必须传入 object_id
+        # 2. 构造处理后的数据对象
         processed = ProcessedData(
-            object_id=raw_data.object_id,  # <--- [关键修复] 必须在这里传入！
+            object_id=raw_data.object_id,
             raw_content=raw_data.content,
             source=raw_data.source,
             summary=response.summary,
@@ -52,8 +56,19 @@ async def run_nlp_agent(raw_data: RawDataInput) -> ProcessedData | None:
             market_impact=response.market_impact,
             long_short_score=response.long_short_score
         )
+
+        # --- [新增] 详细日志检查点 ---
+        print("\n" + "="*40)
+        print(f"🧠 [NLP Agent Analysis Completed] ID: {processed.object_id}")
+        print(f"   ✅ Sentiment:  {processed.sentiment}")
+        print(f"   ✅ Score:      {processed.long_short_score}")
+        print(f"   ✅ Impact:     {processed.market_impact}")
+        print(f"   ✅ Summary:    {processed.summary[:60]}...") # 截断显示以免太长
+        print("="*40 + "\n")
+        # ---------------------------
+
         return processed
 
     except Exception as e:
-        print(f"Error in NLP Analysis Agent: {e}")
+        print(f"❌ Error in NLP Analysis Agent: {e}")
         return None

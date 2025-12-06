@@ -1,6 +1,11 @@
 # MAS-Quant: 多智能体加密货币量化场外信息分析系统
 
-<div align="center">基于多智能体架构的数据闭环清洗与量化分析平台</div>
+<div align="center">
+![Python Version](https://img.shields.io/badge/python-3.10+-blue.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)
+![LangChain](https://img.shields.io/badge/LangChain-latest-red.svg)
+基于多智能体架构的数据闭环清洗与量化分析平台</div>
 
 ## 📖 目录
 
@@ -129,7 +134,7 @@ ANOMALY_AGENT_SCHEDULE_SECONDS=300 # 5分钟
 现在只需要运行一个命令:
 
 ```bash
-uvicorn src.main:app --port 8000 --reload
+uvicorn src.main:app --host 0.0.0.0 --port 8088 --reload
 ```
 
 启动后,系统将自动开始:
@@ -255,3 +260,8 @@ Made with ❤️ by MAS-Quant Team
 [⬆ 回到顶部](#mas-quant-多智能体加密货币量化场外信息分析系统)
 
 </div>
+
+
+
+---
+

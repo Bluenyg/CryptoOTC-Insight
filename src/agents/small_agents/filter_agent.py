@@ -5,7 +5,6 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from config.settings import settings
 
-# ... (filter_llm, FilterOutput 定义保持不变) ...
 
 # 2. 定义过滤链的Pydantic输出
 class FilterOutput(BaseModel):

@@ -12,8 +12,8 @@ def api_call():
 
     json_data = {
         "type": 2,
-        "startTime": "2025-09-01 00:00:00",
-        "endTime": "2025-09-05 00:00:00"
+        "startTime": "2025-11-30 24:00:00",
+        "endTime": "2025-12-1 6:00:00"
     }
 
     response = requests.post('http://api.ibyteai.com:15008/10Ai/dataCenter/crypto/fetchCryptoPanic', headers=headers, json=json_data)

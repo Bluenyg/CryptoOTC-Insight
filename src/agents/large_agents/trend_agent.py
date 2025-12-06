@@ -4,10 +4,6 @@ import httpx
 import json
 from datetime import datetime, timedelta
 
-# [变更] 移除了所有本地数据库相关的导入 (database, models)
-# from src.core.database import async_session
-# from src.core.models import TradingSignals
-
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from config.settings import settings
@@ -15,6 +11,8 @@ from src.schemas.data_models import TradingSignal
 
 # --- 配置 ---
 FETCH_API_URL = "http://api.ibyteai.com:15008/10Ai/dataCenter/crypto/fetchCryptoPanic"
+# [新增] 更新接口地址，用于回传信号
+UPDATE_API_URL = "http://api.ibyteai.com:15008/10Ai/dataCenter/crypto/updatePanicNews"
 HEADERS = {'Content-Type': 'application/json'}
 
 llm = ChatOpenAI(
@@ -78,12 +76,9 @@ async def fetch_processed_news_from_api(coin_type: int, hours: int = 24) -> list
             raw_list = response.json()
             processed_list = []
 
-            # [关键逻辑] 客户端筛选：只保留 update 过的（带有 newsTag）新闻
-            # 假设 updatePanicNews 写入后，fetch 接口返回的 newsTag 会变化
-            # newsTag: 0 (默认/未处理), 1, 2, 3
+            # 客户端筛选：只保留 update 过的（带有 newsTag）新闻
             for item in raw_list:
                 tag = item.get('newsTag', 0)
-                # 过滤掉 tag 为 0 (未处理) 或 None 的数据
                 if tag and tag != 0:
                     processed_list.append(item)
 
@@ -92,6 +87,59 @@ async def fetch_processed_news_from_api(coin_type: int, hours: int = 24) -> list
     except Exception as e:
         print(f"[TrendAgent] Fetch Error (Type {coin_type}): {e}")
         return []
+
+
+async def write_signal_back_to_api(latest_news: dict, signal: TradingSignal):
+    """
+    [新增函数] 将生成的趋势信号回传到外部数据库。
+    """
+    if not latest_news:
+        return
+
+    obj_id = latest_news.get('objectId')
+
+    # 获取原有的字段值
+    current_tag = latest_news.get('newsTag')
+    current_summary = latest_news.get('summary', '')
+    current_analysis = latest_news.get('analysis') or ""
+
+    # 1. 构造信号字符串
+    signal_str = f"【MACRO_SIGNAL】:{signal.confidence}|{signal.trend_24h}|{signal.reasoning}"
+
+    # 2. 追加到 analysis 字段
+    new_analysis = f"{signal_str} || {current_analysis}"
+
+    # --- 【关键修复】文本转数字映射 ---
+    # 定义映射关系：BULLISH->1, NEUTRAL->2, BEARISH->3
+    trend_map = {
+        "BULLISH": 1,
+        "NEUTRAL": 2,
+        "BEARISH": 3
+    }
+    # 获取对应的数字，如果没有匹配到则默认给 2 (Neutral)
+    trend_int = trend_map.get(signal.trend_24h, 2)
+    # --------------------------------
+
+    # 3. 构造 Payload
+    payload = {
+        "objectId": obj_id,
+        "newsTag": current_tag,
+        "summary": current_summary,
+        "analysis": new_analysis,
+        "trendTag": trend_int  # <--- 这里必须传转换后的数字 (trend_int)，不能传字符串
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(UPDATE_API_URL, json=payload, headers=HEADERS, timeout=10.0)
+
+            if response.status_code == 200:
+                print(f"✅ [TrendAgent] Signal saved to External DB (News ID: {obj_id}) | Trend: {trend_int}")
+            else:
+                # 打印详细错误信息以便调试
+                print(f"❌ [TrendAgent] Save Failed [{response.status_code}]: {response.text}")
+    except Exception as e:
+        print(f"❌ [TrendAgent] Save Request Error: {e}")
 
 
 async def run_trend_analysis():
@@ -111,34 +159,38 @@ async def run_trend_analysis():
             print("[TrendAgent] No processed (tagged) news found in the last 24h. Skipping.")
             return
 
+        # [关键步骤] 按时间倒序排序，确保第一个元素是最新的新闻
+        # API 返回的 time 格式可能是 '2025-08-14...' 或 '20250423...'，字符串排序通常足够
+        all_news.sort(key=lambda x: x.get('time', ''), reverse=True)
+
+        latest_news_item = all_news[0]  # 最新的数据点
+
         # 2. 格式化数据供 LLM 阅读
-        # 字段：title, summary, newsTag
         formatted_lines = []
         tag_map = {1: "BULLISH", 2: "NEUTRAL", 3: "BEARISH"}
 
         for item in all_news:
             tag_str = tag_map.get(item.get('newsTag'), "UNKNOWN")
-            # 优先使用 update 进去的 summary，如果没有则使用 title
             content = item.get('summary') if item.get('summary') else item.get('title')
-            line = f"- [{tag_str}] {content}"
-            formatted_lines.append(line)
+            formatted_lines.append(f"- [{tag_str}] {content}")
 
         news_data_str = "\n".join(formatted_lines)
-        print(f"[TrendAgent] Loaded {len(formatted_lines)} processed items for analysis.")
+        print(f"[TrendAgent] Loaded {len(formatted_lines)} processed items. Analyzing...")
 
         # 3. 调用 LLM 生成信号
         signal: TradingSignal = await trend_agent_chain.ainvoke({
             "news_data": news_data_str
         })
 
-        # 4. [变更] 仅输出结果 (移除了本地数据库写入)
-        # 如果你需要将此信号发送给交易机器人，可以在这里添加 webhook 调用
-        print("="*50)
+        print("=" * 50)
         print(f"🚀 [TrendAgent Signal Generated]")
         print(f"Trend:      {signal.trend_24h}")
         print(f"Confidence: {signal.confidence}")
         print(f"Reasoning:  {signal.reasoning}")
-        print("="*50)
+        print("=" * 50)
+
+        # 4. [核心] 将信号回写到外部数据库 (挂载在最新的一条新闻上)
+        await write_signal_back_to_api(latest_news_item, signal)
 
     except Exception as e:
         print(f"Error in Trend Agent: {e}")

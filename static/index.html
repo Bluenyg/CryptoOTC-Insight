@@ -1,0 +1,485 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MAS-Quant Pro | 智能量化终端</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
+
+    <style>
+        :root { --bg-dark: #0b0e14; --panel-bg: #151923; --border-color: #2a2f3e; }
+        body { font-family: 'Inter', sans-serif; background-color: var(--bg-dark); color: #e2e8f0; }
+        .font-mono { font-family: 'JetBrains Mono', monospace; }
+
+        /* 玻璃拟态面板 */
+        .glass-panel {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 0.75rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        /* 滚动条优化 */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: var(--bg-dark); }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+
+        /* 动画 */
+        .anim-pulse { animation: pulse-glow 2s infinite; }
+        @keyframes pulse-glow { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+
+        /* 解决 Chart.js 溢出问题 */
+        .chart-container { position: relative; height: 200px; width: 100%; }
+    </style>
+</head>
+<body>
+    <div id="app" class="min-h-screen flex flex-col" v-cloak>
+
+        <header class="h-14 border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-50 flex items-center justify-between px-6">
+            <div class="flex items-center gap-3">
+                <div class="w-8 h-8 bg-indigo-600 rounded flex items-center justify-center text-white font-bold font-mono">M</div>
+                <span class="font-bold text-lg tracking-tight text-slate-200">MAS-Quant <span class="text-indigo-400 text-xs uppercase px-1.5 py-0.5 bg-indigo-500/10 rounded border border-indigo-500/20">Pro</span></span>
+            </div>
+            <div class="flex items-center gap-4 text-xs font-mono text-slate-400">
+                <div class="flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-emerald-500 anim-pulse"></span>
+                    <span>SYSTEM ONLINE</span>
+                </div>
+                <span>UPDATED: {{ lastUpdated }}</span>
+            </div>
+        </header>
+
+        <main class="flex-1 max-w-[1600px] w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+            <div class="lg:col-span-3 flex flex-col gap-6">
+
+                <div class="glass-panel p-5 relative overflow-hidden group min-h-[180px]">
+                    <div class="absolute -right-6 -top-6 opacity-5 group-hover:opacity-10 transition">
+                        <i class="ri-radar-line text-9xl text-white"></i>
+                    </div>
+                    <h3 class="text-slate-500 text-xs font-bold uppercase tracking-wider mb-3">Macro Signal (24H)</h3>
+
+                    <div v-if="latestSignal" class="relative z-10">
+                        <div class="flex items-end gap-2 mb-2">
+                            <span class="text-3xl font-black tracking-tighter" :class="getSignalColor(latestSignal.trend)">
+                                {{ latestSignal.trend }}
+                            </span>
+                        </div>
+                        <div class="flex items-center gap-2 mb-4 text-xs font-mono text-slate-400">
+                            <span>CONFIDENCE:</span>
+                            <div class="flex-1 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                                <div class="h-full transition-all duration-500"
+                                     :class="getSignalColorBg(latestSignal.trend)"
+                                     :style="{ width: (latestSignal.confidence * 100) + '%' }"></div>
+                            </div>
+                            <span>{{ (latestSignal.confidence * 100).toFixed(0) }}%</span>
+                        </div>
+                        <p class="text-xs text-slate-300 leading-relaxed border-t border-slate-700/50 pt-3">
+                            {{ latestSignal.reasoning }}
+                        </p>
+                    </div>
+                    <div v-else class="h-24 flex items-center justify-center text-slate-600 text-xs">
+                        <span class="animate-pulse">Waiting for Trend Agent...</span>
+                    </div>
+                </div>
+
+                <div class="glass-panel p-5 flex flex-col">
+                    <h3 class="text-slate-500 text-xs font-bold uppercase tracking-wider mb-2">Sentiment Distribution</h3>
+                    <div class="chart-container flex items-center justify-center">
+                        <canvas id="sentimentChart"></canvas>
+                        <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+                            <div class="text-center mt-2">
+                                <span class="block text-3xl font-bold text-white tracking-tighter">{{ stats.tagged_count }}</span>
+                                <span class="text-[10px] text-slate-500 uppercase tracking-widest">Valid Items</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex justify-between mt-4 text-[10px] text-slate-400 font-mono px-2">
+                        <div class="text-center">
+                            <span class="block text-emerald-400 font-bold text-lg">{{ stats.bullish }}</span>
+                            <span>BULL</span>
+                        </div>
+                        <div class="text-center">
+                            <span class="block text-slate-300 font-bold text-lg">{{ stats.neutral }}</span>
+                            <span>NEUT</span>
+                        </div>
+                        <div class="text-center">
+                            <span class="block text-rose-400 font-bold text-lg">{{ stats.bearish }}</span>
+                            <span>BEAR</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="glass-panel p-5">
+                    <h3 class="text-slate-500 text-xs font-bold uppercase tracking-wider mb-4">Pipeline Status</h3>
+                    <div class="space-y-3">
+                        <div class="flex justify-between items-center">
+                            <span class="text-xs text-slate-400">Total Filtered (Noise)</span>
+                            <span class="font-mono text-sm text-slate-500">{{ stats.noise_count }}</span>
+                        </div>
+                        <div class="h-px bg-slate-700/50 my-2"></div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-xs text-slate-300">Raw BTC Source</span>
+                            <span class="font-mono text-sm text-slate-200">{{ stats.btc_count }}</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-xs text-slate-300">Raw ETH Source</span>
+                            <span class="font-mono text-sm text-slate-200">{{ stats.eth_count }}</span>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <div class="lg:col-span-9 glass-panel flex flex-col overflow-hidden h-[800px]">
+
+                <div class="p-4 border-b border-slate-800 flex flex-wrap items-center justify-between gap-4 bg-slate-900/30">
+                    <div class="flex items-center gap-4">
+                        <h2 class="text-sm font-bold text-slate-200 flex items-center gap-2">
+                            <i class="ri-file-list-3-line text-indigo-500"></i> INTELLIGENCE FEED
+                        </h2>
+                        <div class="flex bg-slate-800 p-0.5 rounded text-xs font-medium">
+                            <button @click="activeTab = 'relevant'"
+                                    class="px-3 py-1 rounded transition"
+                                    :class="activeTab === 'relevant' ? 'bg-slate-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'">
+                                Relevant
+                            </button>
+                            <button @click="activeTab = 'noise'"
+                                    class="px-3 py-1 rounded transition"
+                                    :class="activeTab === 'noise' ? 'bg-slate-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'">
+                                Noise Log
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="flex gap-2">
+                        <select v-model="filter.coin" class="bg-slate-900 border border-slate-700 text-xs text-slate-300 rounded px-2 py-1.5 focus:border-indigo-500 outline-none">
+                            <option value="ALL">All Assets</option>
+                            <option value="BTC">BTC</option>
+                            <option value="ETH">ETH</option>
+                        </select>
+                        <select v-model="filter.sentiment" class="bg-slate-900 border border-slate-700 text-xs text-slate-300 rounded px-2 py-1.5 focus:border-indigo-500 outline-none">
+                            <option value="ALL">All Sentiments</option>
+                            <option value="1">Bullish</option>
+                            <option value="3">Bearish</option>
+                            <option value="2">Neutral</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="flex-1 overflow-auto relative">
+                    <table class="w-full text-left border-collapse">
+                        <thead class="bg-slate-900/90 sticky top-0 z-10 backdrop-blur-sm shadow-sm">
+                            <tr class="text-[10px] font-bold font-mono text-slate-500 border-b border-slate-800 uppercase tracking-wider">
+                                <th class="p-3 w-32 pl-5">Time (UTC+8)</th>
+                                <th class="p-3 w-20">Asset</th>
+                                <th class="p-3 w-28">Sentiment</th>
+                                <th class="p-3">Summary & Analysis</th>
+                                <th class="p-3 w-24 text-right pr-5">Quant Score</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-800/50 text-sm">
+                            <tr v-if="filteredList.length === 0">
+                                <td colspan="5" class="p-20 text-center text-slate-500 flex flex-col items-center justify-center">
+                                    <i class="ri-inbox-line text-4xl mb-2 opacity-20"></i>
+                                    <p>No data available for current filter</p>
+                                </td>
+                            </tr>
+                            <tr v-for="item in filteredList" :key="item.objectId" class="hover:bg-slate-800/30 group transition-colors">
+
+                                <td class="p-3 pl-5 font-mono text-xs text-slate-400 align-top pt-4 whitespace-nowrap">
+                                    {{ formatTime(item.time) }}
+                                </td>
+
+                                <td class="p-3 align-top pt-4">
+                                    <span class="text-[10px] font-bold px-1.5 py-0.5 rounded border"
+                                          :class="item.coin_type === 'BTC' ? 'bg-orange-500/10 border-orange-500/20 text-orange-400' : 'bg-purple-500/10 border-purple-500/20 text-purple-400'">
+                                        {{ item.coin_type }}
+                                    </span>
+                                </td>
+
+                                <td class="p-3 align-top pt-4">
+                                    <div v-if="item.newsTag === 4">
+                                        <span class="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-500 border border-slate-700 inline-flex items-center gap-1">
+                                            <i class="ri-filter-line"></i> NOISE
+                                        </span>
+                                    </div>
+                                    <div v-else-if="item.newsTag === 0">
+                                        <span class="text-[10px] px-2 py-0.5 rounded-full bg-blue-900/20 text-blue-400 border border-blue-800/50 animate-pulse inline-flex items-center gap-1">
+                                            <i class="ri-loader-4-line animate-spin"></i> PENDING
+                                        </span>
+                                    </div>
+                                    <div v-else>
+                                        <span class="text-[10px] font-bold px-2 py-0.5 rounded-full border flex w-fit items-center gap-1.5 shadow-sm"
+                                              :class="getTagStyle(item.newsTag)">
+                                            <span class="w-1.5 h-1.5 rounded-full" :class="getTagDot(item.newsTag)"></span>
+                                            {{ getTagName(item.newsTag) }}
+                                        </span>
+                                    </div>
+                                </td>
+
+                                <td class="p-3 align-top pt-4 max-w-xl">
+                                    <div class="text-slate-200 font-medium leading-snug mb-1.5 text-sm line-clamp-2">
+                                        {{ item.summary || item.title }}
+                                    </div>
+                                    <div class="flex flex-wrap gap-2 items-center text-xs text-slate-500">
+                                        <div v-if="extractImpact(item.analysis)"
+                                             class="bg-slate-800/50 px-1.5 py-0.5 rounded border border-slate-700/50 text-[10px] text-slate-400 font-mono">
+                                            IMPACT: {{ extractImpact(item.analysis) }}
+                                        </div>
+                                        <span class="opacity-30" v-if="extractImpact(item.analysis)">|</span>
+                                        <a :href="item.link" target="_blank" class="hover:text-indigo-400 transition flex items-center gap-1">
+                                            Source <i class="ri-external-link-line"></i>
+                                        </a>
+                                    </div>
+                                </td>
+
+                                <td class="p-3 pr-5 align-top pt-4 text-right">
+                                    <span class="font-mono font-bold text-sm"
+                                          :class="getScoreColor(extractScore(item.analysis))">
+                                        {{ extractScore(item.analysis) }}
+                                    </span>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const { createApp, ref, computed, onMounted } = Vue
+
+        createApp({
+            setup() {
+                const allData = ref([])
+                const lastUpdated = ref('-')
+                const latestSignal = ref(null)
+                const chartInstance = ref(null)
+                const activeTab = ref('relevant')
+
+                const filter = ref({ coin: 'ALL', sentiment: 'ALL' })
+                const stats = ref({ btc_count: 0, eth_count: 0, tagged_count: 0, noise_count: 0, bullish: 0, neutral: 0, bearish: 0 })
+
+                // --- Helper Functions ---
+                const formatTime = (t) => {
+                    if (!t) return '-'
+                    if (t.length === 12 && !isNaN(t)) {
+                        const m = t.substring(4, 6), d = t.substring(6, 8), h = t.substring(8, 10), min = t.substring(10, 12)
+                        return `${m}-${d} ${h}:${min}`
+                    }
+                    try {
+                        const date = new Date(t)
+                        if (isNaN(date.getTime())) return t.substring(0, 16)
+                        const month = (date.getMonth() + 1).toString().padStart(2, '0')
+                        const day = date.getDate().toString().padStart(2, '0')
+                        const hours = date.getHours().toString().padStart(2, '0')
+                        const minutes = date.getMinutes().toString().padStart(2, '0')
+                        return `${month}-${day} ${hours}:${minutes}`
+                    } catch (e) { return t }
+                }
+
+                const getTagName = (tag) => {
+                    const t = parseInt(tag)
+                    const map = { 1: 'BULLISH', 2: 'NEUTRAL', 3: 'BEARISH', 4: 'NOISE', 0: 'PENDING' }
+                    return map[t] || 'UNKNOWN'
+                }
+
+                const getTagStyle = (tag) => ({
+                    1: 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400',
+                    2: 'bg-slate-500/10 border-slate-500/20 text-slate-400',
+                    3: 'bg-rose-500/10 border-rose-500/20 text-rose-400'
+                }[tag])
+
+                const getTagDot = (tag) => ({ 1: 'bg-emerald-500', 2: 'bg-slate-500', 3: 'bg-rose-500' }[tag])
+
+                const getSignalColor = (trend) => {
+                    if (trend === 'BULLISH') return 'text-emerald-400'
+                    if (trend === 'BEARISH') return 'text-rose-400'
+                    return 'text-slate-400'
+                }
+                const getSignalColorBg = (trend) => {
+                    if (trend === 'BULLISH') return 'bg-emerald-500'
+                    if (trend === 'BEARISH') return 'bg-rose-500'
+                    return 'bg-slate-400'
+                }
+
+                const extractScore = (analysis) => {
+                    if (!analysis) return '-'
+                    const match = analysis.match(/(?:Score|score)\s*[:=\s]\s*([-\d\.]+)/)
+                    return match ? parseFloat(match[1]).toFixed(2) : '-'
+                }
+
+                const extractImpact = (analysis) => {
+                    if (!analysis) return ''
+                    const match = analysis.match(/(?:Impact|impact)\s*[:=\s]\s*([A-Z]+)/i)
+                    return match ? match[1].toUpperCase() : ''
+                }
+
+                const getScoreColor = (score) => {
+                    if (score === '-') return 'text-slate-600'
+                    const val = parseFloat(score)
+                    if (val > 0.3) return 'text-emerald-400'
+                    if (val < -0.3) return 'text-rose-400'
+                    return 'text-slate-400'
+                }
+
+                // --- Data Fetching ---
+                // --- Data Fetching ---
+const fetchData = async () => {
+    try {
+        const res = await fetch(`/api/dashboard/data?t=${Date.now()}`)
+        const json = await res.json()
+        let freshData = json.data || []
+
+        // 1. 【核心清洗】强制转数字
+        freshData = freshData.map(item => {
+            // 优先取 newsTag，如果 undefined 则取 newTag
+            let raw = item.newsTag !== undefined ? item.newsTag : item.newTag
+            // 强制转整，失败归 0
+            item.newsTag = parseInt(raw) || 0
+            return item
+        })
+
+        // 2. 【关键修复】排序逻辑调整
+        freshData.sort((a, b) => {
+            // 策略 A: 严格按时间倒序 (推荐，最符合直觉)
+            // 这样最新的消息永远在上面，不管它是否处理完
+            const tA = a.time || ''
+            const tB = b.time || ''
+            return tB.localeCompare(tA)
+
+            /* // 策略 B: 如果您非要让“已标记”的排前面，请用这个：
+            const isPendingA = a.newsTag === 0;
+            const isPendingB = b.newsTag === 0;
+            if (isPendingA && !isPendingB) return 1;  // A是Pending，A往后排
+            if (!isPendingA && isPendingB) return -1; // B是Pending，A往前排
+            return tB.localeCompare(tA);
+            */
+        })
+
+        allData.value = freshData
+        lastUpdated.value = json.updated_at
+
+        processStats(freshData)
+        extractLatestSignal(freshData)
+        updateChart()
+    } catch (e) { console.error("Fetch error", e) }
+}
+
+                const processStats = (data) => {
+                    let s = { btc_count: 0, eth_count: 0, tagged_count: 0, noise_count: 0, bullish: 0, neutral: 0, bearish: 0 }
+                    data.forEach(i => {
+                        if (i.coin_type === 'BTC') s.btc_count++
+                        if (i.coin_type === 'ETH') s.eth_count++
+
+                        // 确保 i.newsTag 是数字，避免 '1' !== 1 的隐患
+                        const tag = parseInt(i.newsTag)
+
+                        if (tag === 4) {
+                            s.noise_count++
+                        } else if ([1, 2, 3].includes(tag)) {
+                            s.tagged_count++
+                            if (tag === 1) s.bullish++
+                            if (tag === 2) s.neutral++
+                            if (tag === 3) s.bearish++
+                        }
+                    })
+                    stats.value = s
+                }
+
+                const extractLatestSignal = (data) => {
+                    for (const item of data) {
+                        if (item.analysis && item.analysis.includes('【MACRO_SIGNAL】')) {
+                            try {
+                                const raw = item.analysis.split('【MACRO_SIGNAL】:')[1]
+                                const parts = raw.split('|')
+                                latestSignal.value = {
+                                    confidence: parseFloat(parts[0]),
+                                    trend: parts[1] ? parts[1].trim() : 'NEUTRAL',
+                                    reasoning: parts[2] ? parts[2].split('||')[0] : ''
+                                }
+                                return
+                            } catch(e) {}
+                        }
+                    }
+                }
+
+                const filteredList = computed(() => {
+                    return allData.value.filter(item => {
+                        const tag = parseInt(item.newsTag) // 再次确保是数字
+
+                        if (activeTab.value === 'relevant') {
+                            if (tag === 4) return false
+                        } else {
+                            if (tag !== 4) return false
+                        }
+
+                        if (activeTab.value === 'relevant') {
+                             if (filter.value.coin !== 'ALL' && item.coin_type !== filter.value.coin) return false
+                             if (filter.value.sentiment !== 'ALL') {
+                                 // filter.value.sentiment 是字符串 '1'，tag 是数字 1，所以不能用 ===
+                                 if (tag != parseInt(filter.value.sentiment)) return false
+                             }
+                        }
+                        return true
+                    }).slice(0, 100)
+                })
+
+                // --- Chart.js ---
+                const updateChart = () => {
+                    const ctx = document.getElementById('sentimentChart')
+                    if (!ctx) return
+
+                    const data = [stats.value.bullish, stats.value.neutral, stats.value.bearish]
+                    const total = data.reduce((a, b) => a + b, 0)
+                    const displayData = total === 0 ? [1] : data
+                    const displayColors = total === 0 ? ['#1e293b'] : ['#34d399', '#64748b', '#fb7185']
+
+                    if (chartInstance.value) {
+                        chartInstance.value.data.datasets[0].data = displayData
+                        chartInstance.value.data.datasets[0].backgroundColor = displayColors
+                        chartInstance.value.update()
+                    } else {
+                        chartInstance.value = new Chart(ctx, {
+                            type: 'doughnut',
+                            data: {
+                                labels: ['Bull', 'Neut', 'Bear'],
+                                datasets: [{
+                                    data: displayData,
+                                    backgroundColor: displayColors,
+                                    borderWidth: 0,
+                                    hoverOffset: 4
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                cutout: '85%',
+                                plugins: { legend: { display: false }, tooltip: { enabled: total > 0 } }
+                            }
+                        })
+                    }
+                }
+
+                onMounted(() => {
+                    fetchData()
+                    setInterval(fetchData, 3000)
+                })
+
+                return {
+                    allData, filteredList, lastUpdated, latestSignal, stats, filter, activeTab,
+                    formatTime, getTagName, getTagStyle, getTagDot, getSignalColor, getSignalColorBg,
+                    extractScore, extractImpact, getScoreColor
+                }
+            }
+        }).mount('#app')
+    </script>
+</body>
+</html>

@@ -38,9 +38,16 @@ async def fetch_recent_processed_news(coin_type: int, minutes: int = 60) -> list
                 return []
 
             raw_list = response.json()
-            # 筛选出已处理的 (newsTag 不为 0)
-            #
-            return [item for item in raw_list if item.get('newsTag', 0) != 0]
+
+            # [修复] 筛选出已处理的 (newsTag 不为 None 且不为 0)
+            clean_list = []
+            for item in raw_list:
+                tag = item.get('newsTag')
+                if tag is not None and tag != 0:
+                    clean_list.append(item)
+
+            return clean_list
+
     except Exception as e:
         print(f"[AnomalyAgent] Fetch Error: {e}")
         return []
@@ -62,10 +69,9 @@ async def write_anomaly_back_to_api(latest_news_item: dict, anomaly_msg: str):
 
     payload = {
         "objectId": obj_id,
-        "tag": current_tag,
+        "newsTag": current_tag,
         "summary": current_summary,
         "analysis": new_analysis,
-        # "content": ... (不传 content 以免覆盖原始内容)
     }
 
     try:
