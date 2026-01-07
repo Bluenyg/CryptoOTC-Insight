@@ -3,21 +3,21 @@ import asyncio
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
 
 # 定义一组高优先级的正文选择器
-# 大多数新闻网站的内容都在这些标签里
 MAIN_CONTENT_SELECTORS = "article, main, .post-content, .entry-content, .article-body, #content"
 
-# 定义需要强制排除的噪音选择器 (包括 Cookie 弹窗、侧边栏、推荐阅读)
+# 定义需要强制排除的噪音选择器
 EXCLUDED_SELECTORS = (
     "nav, footer, header, aside, script, style, noscript, "
-    ".cookie-banner, .gdpr-banner, #onetrust-banner-sdk, "  # Cookie 弹窗
-    ".sidebar, .widget, .advertisement, .ad-container, "  # 广告侧边栏
-    ".related-posts, .comments-area, .share-buttons"  # 推荐和评论
+    ".cookie-banner, .gdpr-banner, #onetrust-banner-sdk, "
+    ".sidebar, .widget, .advertisement, .ad-container, "
+    ".related-posts, .comments-area, .share-buttons"
 )
 
 
 async def run_crawler_agent(url: str) -> str | None:
     """
     使用 Crawl4AI 智能抓取网页核心内容，自动去除导航和弹窗噪音。
+    [新增] 增加 3 次重试机制
     """
     if not url or not url.startswith("http"):
         return None
@@ -28,54 +28,59 @@ async def run_crawler_agent(url: str) -> str | None:
         headless=True,
         verbose=False,
         java_script_enabled=True,
-        text_mode=True  # 优化文本提取模式
+        text_mode=True
     )
 
-    # 配置运行参数：核心是 css_selector 和 excluded_tags
     run_config = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
-        # 【关键修改 1】指定抓取范围：只抓取页面中的正文区域
-        # 如果网站包含 <article> 标签，Crawl4AI 将只返回该标签内的 Markdown
         css_selector=MAIN_CONTENT_SELECTORS,
-
-        # 【关键修改 2】排除 CSS 选择器：强力去除导航和无关元素
         excluded_selector=EXCLUDED_SELECTORS,
-
-        # 移除太短的文本块 (防止保留 'Read more' 这种按钮文字)
         word_count_threshold=10,
     )
 
+    # [新增] 重试循环
+    max_retries = 3
+
+    # 注意：我们将 AsyncWebCrawler 上下文管理器放在重试外面，复用浏览器实例
+    # 如果遇到浏览器崩溃等严重错误，可能需要把它放里面，但通常这样够了
     try:
         async with AsyncWebCrawler(config=browser_config) as crawler:
-            result = await crawler.arun(
-                url=url,
-                config=run_config
-            )
+            for attempt in range(max_retries):
+                try:
+                    result = await crawler.arun(url=url, config=run_config)
 
-            if result.success:
-                # 检查抓取结果是否为空 (有时候选择器太严格可能导致抓空)
-                markdown_content = result.markdown
+                    if result.success:
+                        markdown_content = result.markdown
 
-                # 【兜底策略】如果指定选择器抓不到内容（比如网站结构很特殊），则尝试抓取全文但排除噪音
-                if not markdown_content or len(markdown_content) < 100:
-                    print(f"⚠️ [Crawler] Main selector failed, falling back to body crawl for {url}")
-                    fallback_config = CrawlerRunConfig(
-                        cache_mode=CacheMode.BYPASS,
-                        excluded_selector=EXCLUDED_SELECTORS,  # 依然保持排除噪音
-                        word_count_threshold=20
-                    )
-                    fallback_result = await crawler.arun(url=url, config=fallback_config)
-                    markdown_content = fallback_result.markdown
+                        # 【兜底策略】
+                        if not markdown_content or len(markdown_content) < 100:
+                            print(f"⚠️ [Crawler] Main selector failed, trying fallback... ({url})")
+                            fallback_config = CrawlerRunConfig(
+                                cache_mode=CacheMode.BYPASS,
+                                excluded_selector=EXCLUDED_SELECTORS,
+                                word_count_threshold=20
+                            )
+                            fallback_result = await crawler.arun(url=url, config=fallback_config)
+                            markdown_content = fallback_result.markdown
 
-                # 截断过长内容，保留前 6000 字符（足以包含核心新闻）
-                print(f"✅ [Crawler] Scraped length: {len(markdown_content)}")
-                return markdown_content[:6000]
-            else:
-                print(f"[Crawler] Failed: {result.error_message}")
-                return None
+                        if markdown_content and len(markdown_content) >= 50:
+                            print(f"✅ [Crawler] Scraped length: {len(markdown_content)}")
+                            return markdown_content[:6000]
+                        else:
+                            raise ValueError("Content too short or empty after fallback")
+                    else:
+                        raise ValueError(f"Crawl failed: {result.error_message}")
+
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        print(f"❌ [Crawler] Failed after {max_retries} attempts: {e}")
+                        return None
+
+                    print(f"⚠️ [Crawler] Retry ({attempt + 1}/{max_retries}) for {url}: {e}")
+                    await asyncio.sleep(2)  # 等待2秒重试
 
     except Exception as e:
-        print(f"[Crawler] Error: {e}")
+        print(f"❌ [Crawler] Browser Init Error: {e}")
         return None
 
 

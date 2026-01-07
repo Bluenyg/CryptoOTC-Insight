@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="zh-CN" class="dark">
 <head>
@@ -8,39 +7,38 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
 
     <style>
         :root { --bg-dark: #0b0e14; --panel-bg: #151923; --border-color: #2a2f3e; }
-        body { font-family: 'Inter', sans-serif; background-color: var(--bg-dark); color: #e2e8f0; }
+        body { font-family: 'Inter', sans-serif; background-color: var(--bg-dark); color: #e2e8f0; overflow: hidden; }
         .font-mono { font-family: 'JetBrains Mono', monospace; }
-
-        /* 玻璃拟态面板 */
         .glass-panel {
             background: var(--panel-bg);
             border: 1px solid var(--border-color);
             border-radius: 0.75rem;
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
         }
-
-        /* 滚动条优化 */
+        /* 自定义滚动条 */
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: var(--bg-dark); }
         ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
 
-        /* 动画 */
         .anim-pulse { animation: pulse-glow 2s infinite; }
         @keyframes pulse-glow { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
-
-        /* 解决 Chart.js 溢出问题 */
         .chart-container { position: relative; height: 200px; width: 100%; }
+
+        .modal-enter-active, .modal-leave-active { transition: opacity 0.3s ease; }
+        .modal-enter-from, .modal-leave-to { opacity: 0; }
     </style>
 </head>
 <body>
-    <div id="app" class="min-h-screen flex flex-col" v-cloak>
+    <div id="app" class="h-screen flex flex-col" v-cloak>
 
-        <header class="h-14 border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-50 flex items-center justify-between px-6">
+        <header class="h-14 border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-50 flex items-center justify-between px-6 shrink-0">
             <div class="flex items-center gap-3">
                 <div class="w-8 h-8 bg-indigo-600 rounded flex items-center justify-center text-white font-bold font-mono">M</div>
                 <span class="font-bold text-lg tracking-tight text-slate-200">MAS-Quant <span class="text-indigo-400 text-xs uppercase px-1.5 py-0.5 bg-indigo-500/10 rounded border border-indigo-500/20">Pro</span></span>
@@ -51,14 +49,17 @@
                     <span>SYSTEM ONLINE</span>
                 </div>
                 <span>UPDATED: {{ lastUpdated }}</span>
+                <a href="/logout" class="ml-2 text-slate-500 hover:text-red-400 transition-colors" title="Logout">
+                    <i class="ri-logout-box-r-line text-lg"></i>
+                </a>
             </div>
         </header>
 
-        <main class="flex-1 max-w-[1600px] w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <main class="flex-1 w-full max-w-[1920px] mx-auto p-4 lg:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 h-[calc(100vh-3.5rem)] overflow-hidden">
 
-            <div class="lg:col-span-3 flex flex-col gap-6">
+            <div class="lg:col-span-3 flex flex-col gap-6 overflow-y-auto h-full pr-1 pb-10">
 
-                <div class="glass-panel p-5 relative overflow-hidden group min-h-[180px]">
+                <div class="glass-panel p-5 relative overflow-hidden group min-h-[180px] shrink-0">
                     <div class="absolute -right-6 -top-6 opacity-5 group-hover:opacity-10 transition">
                         <i class="ri-radar-line text-9xl text-white"></i>
                     </div>
@@ -88,7 +89,55 @@
                     </div>
                 </div>
 
-                <div class="glass-panel p-5 flex flex-col">
+                <div @click="openHistoryModal"
+                     class="glass-panel p-5 relative overflow-hidden group min-h-[180px] shrink-0 cursor-pointer hover:border-indigo-500/50 transition-colors">
+
+                    <div class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-[10px] text-indigo-400 font-mono bg-indigo-500/10 px-2 py-1 rounded">
+                        <i class="ri-bar-chart-line mr-1"></i>View Analysis
+                    </div>
+
+                    <div class="absolute -right-6 -top-6 opacity-5 group-hover:opacity-10 transition">
+                        <i class="ri-flashlight-fill text-9xl text-yellow-500"></i>
+                    </div>
+                    <div class="flex items-center gap-2 mb-3">
+                        <h3 class="text-slate-500 text-xs font-bold uppercase tracking-wider">Short-Term Signal (1H)</h3>
+                        <span class="flex h-2 w-2 relative">
+                            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-75"></span>
+                            <span class="relative inline-flex rounded-full h-2 w-2 bg-yellow-500"></span>
+                        </span>
+                    </div>
+
+                    <div v-if="latestShortTerm" class="relative z-10">
+                        <div class="flex items-end gap-2 mb-2">
+                             <span class="text-3xl font-black tracking-tighter" :class="getSignalColor(latestShortTerm.trend)">
+                                {{ latestShortTerm.trend }}
+                            </span>
+                        </div>
+
+                        <div class="flex items-center gap-2 mb-3 text-xs font-mono text-slate-400">
+                            <span>CONFIDENCE:</span>
+                            <div class="flex-1 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                                <div class="h-full transition-all duration-500"
+                                     :class="getSignalColorBg(latestShortTerm.trend)"
+                                     :style="{ width: (latestShortTerm.confidence * 100) + '%' }"></div>
+                            </div>
+                            <span>{{ (latestShortTerm.confidence * 100).toFixed(0) }}%</span>
+                        </div>
+
+                        <p class="text-xs text-slate-300 leading-relaxed border-t border-slate-700/50 pt-2 mb-2">
+                            {{ latestShortTerm.reasoning }}
+                        </p>
+
+                        <div class="text-[10px] text-slate-500 font-mono text-right flex items-center justify-end gap-1 mt-2">
+                            <i class="ri-time-line"></i> Analysis Time: {{ formatTime(latestShortTerm.time) }}
+                        </div>
+                    </div>
+                    <div v-else class="h-20 flex items-center justify-center text-slate-600 text-xs">
+                         <span class="animate-pulse">Waiting for 1H Agent...</span>
+                    </div>
+                </div>
+
+                <div class="glass-panel p-5 flex flex-col shrink-0">
                     <h3 class="text-slate-500 text-xs font-bold uppercase tracking-wider mb-2">Sentiment Distribution</h3>
                     <div class="chart-container flex items-center justify-center">
                         <canvas id="sentimentChart"></canvas>
@@ -115,7 +164,7 @@
                     </div>
                 </div>
 
-                <div class="glass-panel p-5">
+                <div class="glass-panel p-5 shrink-0">
                     <h3 class="text-slate-500 text-xs font-bold uppercase tracking-wider mb-4">Pipeline Status</h3>
                     <div class="space-y-3">
                         <div class="flex justify-between items-center">
@@ -133,12 +182,10 @@
                         </div>
                     </div>
                 </div>
-
             </div>
 
-            <div class="lg:col-span-9 glass-panel flex flex-col overflow-hidden h-[800px]">
-
-                <div class="p-4 border-b border-slate-800 flex flex-wrap items-center justify-between gap-4 bg-slate-900/30">
+            <div class="lg:col-span-9 glass-panel flex flex-col overflow-hidden h-full">
+                <div class="p-4 border-b border-slate-800 flex flex-wrap items-center justify-between gap-4 bg-slate-900/30 shrink-0">
                     <div class="flex items-center gap-4">
                         <h2 class="text-sm font-bold text-slate-200 flex items-center gap-2">
                             <i class="ri-file-list-3-line text-indigo-500"></i> INTELLIGENCE FEED
@@ -191,18 +238,15 @@
                                 </td>
                             </tr>
                             <tr v-for="item in filteredList" :key="item.objectId" class="hover:bg-slate-800/30 group transition-colors">
-
                                 <td class="p-3 pl-5 font-mono text-xs text-slate-400 align-top pt-4 whitespace-nowrap">
                                     {{ formatTime(item.time) }}
                                 </td>
-
                                 <td class="p-3 align-top pt-4">
                                     <span class="text-[10px] font-bold px-1.5 py-0.5 rounded border"
                                           :class="item.coin_type === 'BTC' ? 'bg-orange-500/10 border-orange-500/20 text-orange-400' : 'bg-purple-500/10 border-purple-500/20 text-purple-400'">
                                         {{ item.coin_type }}
                                     </span>
                                 </td>
-
                                 <td class="p-3 align-top pt-4">
                                     <div v-if="item.newsTag === 4">
                                         <span class="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-500 border border-slate-700 inline-flex items-center gap-1">
@@ -222,7 +266,6 @@
                                         </span>
                                     </div>
                                 </td>
-
                                 <td class="p-3 align-top pt-4 max-w-xl">
                                     <div class="text-slate-200 font-medium leading-snug mb-1.5 text-sm line-clamp-2">
                                         {{ item.summary || item.title }}
@@ -238,7 +281,6 @@
                                         </a>
                                     </div>
                                 </td>
-
                                 <td class="p-3 pr-5 align-top pt-4 text-right">
                                     <span class="font-mono font-bold text-sm"
                                           :class="getScoreColor(extractScore(item.analysis))">
@@ -251,38 +293,88 @@
                 </div>
             </div>
         </main>
+
+        <div v-if="showHistoryModal" class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" @click.self="closeHistoryModal">
+            <div class="bg-[#151923] border border-slate-700 rounded-xl w-full max-w-4xl h-[80vh] flex flex-col shadow-2xl relative animate-[fadeIn_0.2s_ease-out]">
+
+                <div class="p-5 border-b border-slate-800 flex justify-between items-center bg-slate-900/50 rounded-t-xl">
+                    <div>
+                        <h2 class="text-lg font-bold text-white flex items-center gap-2">
+                            <i class="ri-history-line text-indigo-500"></i> 1H Prediction Accuracy (24h)
+                        </h2>
+                        <p class="text-xs text-slate-400 mt-1">Comparing 1H predictions vs Actual Market Moves (Aligned to UTC+8)</p>
+                    </div>
+                    <button @click="closeHistoryModal" class="text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 p-2 rounded-full transition">
+                        <i class="ri-close-line text-xl"></i>
+                    </button>
+                </div>
+
+                <div class="flex-1 overflow-hidden flex flex-col p-6 gap-6">
+
+                    <div class="grid grid-cols-4 gap-4">
+                        <div class="bg-slate-900/50 border border-slate-800 p-4 rounded-lg text-center">
+                            <div class="text-xs text-slate-500 uppercase tracking-wider mb-1">Total Signals</div>
+                            <div class="text-2xl font-mono font-bold text-white">{{ predictionHistory.length }}</div>
+                        </div>
+                        <div class="bg-slate-900/50 border border-slate-800 p-4 rounded-lg text-center">
+                            <div class="text-xs text-slate-500 uppercase tracking-wider mb-1">Accuracy</div>
+                            <div class="text-2xl font-mono font-bold" :class="accuracyRate >= 50 ? 'text-emerald-400' : 'text-rose-400'">
+                                {{ accuracyRate.toFixed(0) }}%
+                            </div>
+                        </div>
+                        <div class="bg-slate-900/50 border border-slate-800 p-4 rounded-lg text-center">
+                            <div class="text-xs text-slate-500 uppercase tracking-wider mb-1">Correct</div>
+                            <div class="text-2xl font-mono font-bold text-emerald-400">{{ correctCount }}</div>
+                        </div>
+                        <div class="bg-slate-900/50 border border-slate-800 p-4 rounded-lg text-center">
+                            <div class="text-xs text-slate-500 uppercase tracking-wider mb-1">Asset</div>
+                            <div class="text-2xl font-mono font-bold text-orange-400">BTC</div>
+                        </div>
+                    </div>
+
+                    <div class="flex-1 bg-slate-900/30 border border-slate-800 rounded-lg p-4 relative min-h-0">
+                        <canvas id="historyChart"></canvas>
+                        <div v-if="isLoadingHistory" class="absolute inset-0 flex items-center justify-center bg-slate-900/80 z-10">
+                            <div class="flex flex-col items-center">
+                                <i class="ri-loader-4-line text-3xl animate-spin text-indigo-500 mb-2"></i>
+                                <span class="text-xs text-slate-400">Loading Market Data...</span>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
     </div>
 
     <script>
-        const { createApp, ref, computed, onMounted } = Vue
+        const { createApp, ref, computed, onMounted, nextTick } = Vue
 
         createApp({
             setup() {
                 const allData = ref([])
                 const lastUpdated = ref('-')
                 const latestSignal = ref(null)
-                const chartInstance = ref(null)
-                const activeTab = ref('relevant')
+                const latestShortTerm = ref(null)
 
+                const chartInstance = ref(null)
+                const historyChartInstance = ref(null)
+                const activeTab = ref('relevant')
                 const filter = ref({ coin: 'ALL', sentiment: 'ALL' })
                 const stats = ref({ btc_count: 0, eth_count: 0, tagged_count: 0, noise_count: 0, bullish: 0, neutral: 0, bearish: 0 })
+
+                const showHistoryModal = ref(false)
+                const isLoadingHistory = ref(false)
+                const predictionHistory = ref([])
+                const correctCount = ref(0)
+                const accuracyRate = ref(0)
 
                 // --- Helper Functions ---
                 const formatTime = (t) => {
                     if (!t) return '-'
-                    if (t.length === 12 && !isNaN(t)) {
-                        const m = t.substring(4, 6), d = t.substring(6, 8), h = t.substring(8, 10), min = t.substring(10, 12)
-                        return `${m}-${d} ${h}:${min}`
-                    }
-                    try {
-                        const date = new Date(t)
-                        if (isNaN(date.getTime())) return t.substring(0, 16)
-                        const month = (date.getMonth() + 1).toString().padStart(2, '0')
-                        const day = date.getDate().toString().padStart(2, '0')
-                        const hours = date.getHours().toString().padStart(2, '0')
-                        const minutes = date.getMinutes().toString().padStart(2, '0')
-                        return `${month}-${day} ${hours}:${minutes}`
-                    } catch (e) { return t }
+                    if (typeof t === 'string' && t.length >= 16) return t.substring(5, 16);
+                    return t;
                 }
 
                 const getTagName = (tag) => {
@@ -330,61 +422,54 @@
                     return 'text-slate-400'
                 }
 
-                // --- Data Fetching ---
-                // --- Data Fetching ---
-const fetchData = async () => {
-    try {
-        const res = await fetch(`/api/dashboard/data?t=${Date.now()}`)
-        const json = await res.json()
-        let freshData = json.data || []
+                // --- 强制北京时间格式化 ---
+                const formatTimeInBJ = (timestamp) => {
+                    return new Date(timestamp).toLocaleString('zh-CN', {
+                        timeZone: 'Asia/Shanghai',
+                        hour12: false,
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                    });
+                }
 
-        // 1. 【核心清洗】强制转数字
-        freshData = freshData.map(item => {
-            // 优先取 newsTag，如果 undefined 则取 newTag
-            let raw = item.newsTag !== undefined ? item.newsTag : item.newTag
-            // 强制转整，失败归 0
-            item.newsTag = parseInt(raw) || 0
-            return item
-        })
+                // --- Core Logic ---
+                const fetchData = async () => {
+                    try {
+                        const res = await fetch(`/api/dashboard/data?t=${Date.now()}`)
+                        if (res.redirected) { window.location.href = res.url; return; }
+                        const json = await res.json()
+                        let freshData = json.data || []
+                        freshData = freshData.map(item => {
+                            let raw = item.newsTag !== undefined ? item.newsTag : item.newTag
+                            item.newsTag = parseInt(raw) || 0
+                            return item
+                        })
+                        freshData.sort((a, b) => {
+                            const tA = a.time || ''
+                            const tB = b.time || ''
+                            return tB.localeCompare(tA)
+                        })
+                        allData.value = freshData
+                        lastUpdated.value = json.updated_at
 
-        // 2. 【关键修复】排序逻辑调整
-        freshData.sort((a, b) => {
-            // 策略 A: 严格按时间倒序 (推荐，最符合直觉)
-            // 这样最新的消息永远在上面，不管它是否处理完
-            const tA = a.time || ''
-            const tB = b.time || ''
-            return tB.localeCompare(tA)
+                        processStats(freshData)
+                        extractLatestSignal(freshData)
+                        extractShortTermSignal(freshData)
 
-            /* // 策略 B: 如果您非要让“已标记”的排前面，请用这个：
-            const isPendingA = a.newsTag === 0;
-            const isPendingB = b.newsTag === 0;
-            if (isPendingA && !isPendingB) return 1;  // A是Pending，A往后排
-            if (!isPendingA && isPendingB) return -1; // B是Pending，A往前排
-            return tB.localeCompare(tA);
-            */
-        })
-
-        allData.value = freshData
-        lastUpdated.value = json.updated_at
-
-        processStats(freshData)
-        extractLatestSignal(freshData)
-        updateChart()
-    } catch (e) { console.error("Fetch error", e) }
-}
+                        updateChart()
+                    } catch (e) { console.error("Fetch error", e) }
+                }
 
                 const processStats = (data) => {
                     let s = { btc_count: 0, eth_count: 0, tagged_count: 0, noise_count: 0, bullish: 0, neutral: 0, bearish: 0 }
                     data.forEach(i => {
                         if (i.coin_type === 'BTC') s.btc_count++
                         if (i.coin_type === 'ETH') s.eth_count++
-
-                        // 确保 i.newsTag 是数字，避免 '1' !== 1 的隐患
                         const tag = parseInt(i.newsTag)
-
-                        if (tag === 4) {
-                            s.noise_count++
-                        } else if ([1, 2, 3].includes(tag)) {
+                        if (tag === 4) { s.noise_count++ }
+                        else if ([1, 2, 3].includes(tag)) {
                             s.tagged_count++
                             if (tag === 1) s.bullish++
                             if (tag === 2) s.neutral++
@@ -411,20 +496,222 @@ const fetchData = async () => {
                     }
                 }
 
+                const extractShortTermSignal = (data) => {
+                    for (const item of data) {
+                        if (item.analysis && item.analysis.includes('【1H_PREDICTION】')) {
+                            try {
+                                const raw = item.analysis.split('【1H_PREDICTION】:')[1]
+                                const signalPart = raw.split('||')[0]
+                                const parts = signalPart.split('|')
+                                latestShortTerm.value = {
+                                    confidence: parseFloat(parts[0]),
+                                    trend: parts[1] ? parts[1].trim() : 'NEUTRAL',
+                                    reasoning: parts[2] ? parts[2] : '',
+                                    time: item.time
+                                }
+                                return
+                            } catch(e) {}
+                        }
+                    }
+                }
+
+                // --- History Modal Logic ---
+                const openHistoryModal = async () => {
+                    showHistoryModal.value = true
+                    isLoadingHistory.value = true
+                    await nextTick()
+
+                    const predictions = []
+                    allData.value.forEach(item => {
+                        if (item.analysis && item.analysis.includes('【1H_PREDICTION】')) {
+                            try {
+                                const raw = item.analysis.split('【1H_PREDICTION】:')[1]
+                                const signalPart = raw.split('||')[0]
+                                const parts = signalPart.split('|')
+
+                                // 【关键修复】item.time 是 "2024-12-21 14:00:00" (北京时间字符串)
+                                // 为了在图表上正确对齐 UTC 时间戳，我们需要解析它为 "Asia/Shanghai" 的时间
+                                // 加上 +08:00 后，JS 会知道这是东八区时间，从而计算出正确的 Absolute Timestamp
+                                const bjTimeString = item.time.replace(' ', 'T') + '+08:00';
+                                const ts = new Date(bjTimeString).getTime();
+
+                                predictions.push({
+                                    time: ts,
+                                    trend: parts[1].trim().toUpperCase(),
+                                    rawTime: item.time
+                                })
+                            } catch(e) {}
+                        }
+                    })
+                    predictions.sort((a, b) => a.time - b.time)
+                    predictionHistory.value = predictions
+
+                    try {
+                        const res = await fetch('/api/market/history?symbol=BTCUSDT&interval=1h&limit=72')
+                        const json = await res.json()
+                        if (json.data) {
+                            renderHistoryChart(json.data, predictions)
+                        }
+                    } catch(e) { console.error("History fetch error", e) }
+
+                    isLoadingHistory.value = false
+                }
+
+                const closeHistoryModal = () => {
+                    showHistoryModal.value = false
+                    if (historyChartInstance.value) {
+                        historyChartInstance.value.destroy()
+                        historyChartInstance.value = null
+                    }
+                }
+
+                const renderHistoryChart = (klines, predictions) => {
+                    const ctx = document.getElementById('historyChart')
+                    if (!ctx) return
+
+                    // KLines 时间戳本身是 UTC，这里无需处理，Chart.js 会处理
+                    const priceData = klines.map(k => ({ x: k.time, y: k.close }))
+
+                    let correct = 0
+                    let totalValid = 0
+                    const predictionPoints = []
+
+                    predictions.forEach(pred => {
+                        const newsTime = pred.time
+                        const targetTime = newsTime + 3600 * 1000 // 1小时后
+
+                        // 查找 K 线
+                        const startK = klines.find(k => k.time <= newsTime && newsTime < k.time + 3600000)
+                        const endK = klines.find(k => k.time <= targetTime && targetTime < k.time + 3600000)
+
+                        if (startK && endK && pred.trend !== 'NEUTRAL') {
+                            const startPrice = startK.close
+                            const endPrice = endK.close
+                            const priceChange = endPrice - startPrice
+
+                            let isCorrect = false
+                            if (pred.trend === 'BULLISH' && priceChange > 0) isCorrect = true
+                            if (pred.trend === 'BEARISH' && priceChange < 0) isCorrect = true
+
+                            if (isCorrect) correct++
+                            totalValid++
+
+                            predictionPoints.push({
+                                x: newsTime,
+                                y: startPrice,
+                                trend: pred.trend,
+                                isCorrect: isCorrect,
+                                actualChange: priceChange
+                            })
+                        }
+                    })
+
+                    correctCount.value = correct
+                    accuracyRate.value = totalValid > 0 ? (correct / totalValid * 100) : 0
+
+                    if (historyChartInstance.value) historyChartInstance.value.destroy()
+
+                    historyChartInstance.value = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            datasets: [
+                                {
+                                    label: 'BTC Price (1H)',
+                                    data: priceData,
+                                    borderColor: '#6366f1',
+                                    borderWidth: 2,
+                                    tension: 0.4,
+                                    pointRadius: 0,
+                                    pointHoverRadius: 0
+                                },
+                                {
+                                    label: 'Predictions',
+                                    type: 'scatter',
+                                    data: predictionPoints,
+                                    pointStyle: 'circle',
+                                    pointRadius: 6,
+                                    pointHoverRadius: 10,
+                                    pointBackgroundColor: (ctx) => {
+                                        const raw = ctx.raw
+                                        if (!raw) return '#888'
+                                        return raw.isCorrect ? '#10b981' : '#f43f5e'
+                                    },
+                                    pointBorderColor: '#fff',
+                                    pointBorderWidth: 2
+                                }
+                            ]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            interaction: {
+                                mode: 'index',
+                                intersect: false,
+                            },
+                            plugins: {
+                                legend: { display: false },
+                                tooltip: {
+                                    callbacks: {
+                                        // 【关键修改】Tooltip 标题强制显示北京时间
+                                        title: function(context) {
+                                            const ts = context[0].parsed.x;
+                                            return formatTimeInBJ(ts);
+                                        },
+                                        label: function(context) {
+                                            const raw = context.raw
+                                            if (raw.trend) {
+                                                const status = raw.isCorrect ? '✅ Correct' : '❌ Wrong'
+                                                return `Predict: ${raw.trend} | Result: ${status} (Change: $${raw.actualChange.toFixed(2)})`
+                                            } else {
+                                                return `Price: $${raw.y}`
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            scales: {
+                                x: {
+                                    type: 'time',
+                                    time: {
+                                        unit: 'hour',
+                                        // Chart.js 默认用本地时间，这里我们不改适配器配置，
+                                        // 而是直接通过 callback 覆盖显示的文字为北京时间
+                                        displayFormats: { hour: 'HH:mm' }
+                                    },
+                                    ticks: {
+                                        color: '#64748b',
+                                        // 【关键修改】X轴标签强制显示北京时间
+                                        callback: function(val, index) {
+                                            return new Date(val).toLocaleTimeString('zh-CN', {
+                                                timeZone: 'Asia/Shanghai',
+                                                hour12: false,
+                                                hour: '2-digit',
+                                                minute: '2-digit'
+                                            });
+                                        }
+                                    },
+                                    grid: { color: '#1e293b' }
+                                },
+                                y: {
+                                    grid: { color: '#1e293b' },
+                                    ticks: { color: '#64748b' }
+                                }
+                            }
+                        }
+                    })
+                }
+
                 const filteredList = computed(() => {
                     return allData.value.filter(item => {
-                        const tag = parseInt(item.newsTag) // 再次确保是数字
-
+                        const tag = parseInt(item.newsTag)
                         if (activeTab.value === 'relevant') {
                             if (tag === 4) return false
                         } else {
                             if (tag !== 4) return false
                         }
-
                         if (activeTab.value === 'relevant') {
                              if (filter.value.coin !== 'ALL' && item.coin_type !== filter.value.coin) return false
                              if (filter.value.sentiment !== 'ALL') {
-                                 // filter.value.sentiment 是字符串 '1'，tag 是数字 1，所以不能用 ===
                                  if (tag != parseInt(filter.value.sentiment)) return false
                              }
                         }
@@ -432,11 +719,9 @@ const fetchData = async () => {
                     }).slice(0, 100)
                 })
 
-                // --- Chart.js ---
                 const updateChart = () => {
                     const ctx = document.getElementById('sentimentChart')
                     if (!ctx) return
-
                     const data = [stats.value.bullish, stats.value.neutral, stats.value.bearish]
                     const total = data.reduce((a, b) => a + b, 0)
                     const displayData = total === 0 ? [1] : data
@@ -470,11 +755,13 @@ const fetchData = async () => {
 
                 onMounted(() => {
                     fetchData()
-                    setInterval(fetchData, 3000)
+                    setInterval(fetchData, 15000)
                 })
 
                 return {
-                    allData, filteredList, lastUpdated, latestSignal, stats, filter, activeTab,
+                    allData, filteredList, lastUpdated, latestSignal, latestShortTerm, stats, filter, activeTab,
+                    showHistoryModal, isLoadingHistory, predictionHistory, correctCount, accuracyRate,
+                    openHistoryModal, closeHistoryModal,
                     formatTime, getTagName, getTagStyle, getTagDot, getSignalColor, getSignalColorBg,
                     extractScore, extractImpact, getScoreColor
                 }

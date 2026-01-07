@@ -20,5 +20,8 @@ class Settings(BaseSettings):
     # 异常脉冲检测 (大Agent - 异常) - 运行更频繁
     ANOMALY_AGENT_SCHEDULE_SECONDS: int = 300  # 5 分钟
 
+    # [新增] 短线 Agent 运行间隔：15分钟 (900秒)
+    SHORT_TERM_INTERVAL : int = 300
+
 
 settings = Settings()
