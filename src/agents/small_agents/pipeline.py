@@ -89,6 +89,11 @@ async def verify_db_write(client: httpx.AsyncClient, object_id: str, expected_ta
 
 async def db_write_node(state: SmallAgentState):
     """写入节点 (包含重试和回读验证逻辑)"""
+    # 【新增】检查上一步是否成功生成了 processed_data
+    if 'processed_data' not in state or state['processed_data'] is None:
+        print("⚠️ [Pipeline] Skip writing: No processed data available.")
+        return {"status": "skipped"}
+
     data = state['processed_data']
     final_content = state.get('full_content') or ""
 

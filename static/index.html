@@ -33,6 +33,9 @@
 
         .modal-enter-active, .modal-leave-active { transition: opacity 0.3s ease; }
         .modal-enter-from, .modal-leave-to { opacity: 0; }
+
+        /* 简单的淡入动画 */
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
     </style>
 </head>
 <body>
@@ -67,15 +70,15 @@
 
                     <div v-if="latestSignal" class="relative z-10">
                         <div class="flex items-end gap-2 mb-2">
-                            <span class="text-3xl font-black tracking-tighter" :class="getSignalColor(latestSignal.trend)">
-                                {{ latestSignal.trend }}
+                            <span class="text-3xl font-black tracking-tighter" :class="getSignalColor(latestSignal.direction)">
+                                {{ latestSignal.direction }}
                             </span>
                         </div>
                         <div class="flex items-center gap-2 mb-4 text-xs font-mono text-slate-400">
                             <span>CONFIDENCE:</span>
                             <div class="flex-1 h-1.5 bg-slate-700 rounded-full overflow-hidden">
                                 <div class="h-full transition-all duration-500"
-                                     :class="getSignalColorBg(latestSignal.trend)"
+                                     :class="getSignalColorBg(latestSignal.direction)"
                                      :style="{ width: (latestSignal.confidence * 100) + '%' }"></div>
                             </div>
                             <span>{{ (latestSignal.confidence * 100).toFixed(0) }}%</span>
@@ -83,6 +86,21 @@
                         <p class="text-xs text-slate-300 leading-relaxed border-t border-slate-700/50 pt-3">
                             {{ latestSignal.reasoning }}
                         </p>
+
+                        <div class="mt-3">
+                            <button @click="showTrendDetails = !showTrendDetails"
+                                    class="text-[10px] flex items-center gap-1 text-indigo-400 hover:text-indigo-300 transition-colors font-mono cursor-pointer outline-none select-none">
+                                <i :class="showTrendDetails ? 'ri-arrow-up-s-line' : 'ri-arrow-down-s-line'"></i>
+                                {{ showTrendDetails ? 'Hide Chain of Thought' : 'View Chain of Thought' }}
+                            </button>
+
+                            <div v-if="showTrendDetails" class="mt-2 p-3 bg-slate-950/50 rounded border border-slate-800 text-[10px] text-slate-400 font-mono leading-relaxed whitespace-pre-wrap" style="animation: fadeIn 0.2s ease-out;">
+                                {{ latestSignal.chain_of_thought || 'No detailed chain of thought available.' }}
+                            </div>
+                        </div>
+                        <div class="text-[10px] text-slate-500 font-mono text-right flex items-center justify-end gap-1 mt-2">
+                            <i class="ri-time-line"></i> Predict Time: {{ formatTime(latestSignal.timestamp) }}
+                        </div>
                     </div>
                     <div v-else class="h-24 flex items-center justify-center text-slate-600 text-xs">
                         <span class="animate-pulse">Waiting for Trend Agent...</span>
@@ -109,8 +127,8 @@
 
                     <div v-if="latestShortTerm" class="relative z-10">
                         <div class="flex items-end gap-2 mb-2">
-                             <span class="text-3xl font-black tracking-tighter" :class="getSignalColor(latestShortTerm.trend)">
-                                {{ latestShortTerm.trend }}
+                             <span class="text-3xl font-black tracking-tighter" :class="getSignalColor(latestShortTerm.direction)">
+                                {{ latestShortTerm.direction }}
                             </span>
                         </div>
 
@@ -118,7 +136,7 @@
                             <span>CONFIDENCE:</span>
                             <div class="flex-1 h-1.5 bg-slate-700 rounded-full overflow-hidden">
                                 <div class="h-full transition-all duration-500"
-                                     :class="getSignalColorBg(latestShortTerm.trend)"
+                                     :class="getSignalColorBg(latestShortTerm.direction)"
                                      :style="{ width: (latestShortTerm.confidence * 100) + '%' }"></div>
                             </div>
                             <span>{{ (latestShortTerm.confidence * 100).toFixed(0) }}%</span>
@@ -128,8 +146,20 @@
                             {{ latestShortTerm.reasoning }}
                         </p>
 
+                        <div class="mt-2 mb-2">
+                            <button @click.stop="showShortTermDetails = !showShortTermDetails"
+                                    class="text-[10px] flex items-center gap-1 text-yellow-500/80 hover:text-yellow-400 transition-colors font-mono cursor-pointer outline-none select-none">
+                                <i :class="showShortTermDetails ? 'ri-arrow-up-s-line' : 'ri-arrow-down-s-line'"></i>
+                                {{ showShortTermDetails ? 'Hide Logic' : 'View Logic' }}
+                            </button>
+
+                            <div v-if="showShortTermDetails" class="mt-2 p-3 bg-slate-950/50 rounded border border-slate-800 text-[10px] text-slate-400 font-mono leading-relaxed whitespace-pre-wrap" style="animation: fadeIn 0.2s ease-out;">
+                                {{ latestShortTerm.chain_of_thought || 'No detailed logic available.' }}
+                            </div>
+                        </div>
+
                         <div class="text-[10px] text-slate-500 font-mono text-right flex items-center justify-end gap-1 mt-2">
-                            <i class="ri-time-line"></i> Analysis Time: {{ formatTime(latestShortTerm.time) }}
+                            <i class="ri-time-line"></i> Predict Time: {{ formatTime(latestShortTerm.timestamp) }}
                         </div>
                     </div>
                     <div v-else class="h-20 flex items-center justify-center text-slate-600 text-xs">
@@ -271,6 +301,12 @@
                                         {{ item.summary || item.title }}
                                     </div>
                                     <div class="flex flex-wrap gap-2 items-center text-xs text-slate-500">
+                                        <div v-if="item.latest_short_term"
+                                             class="bg-slate-800/50 px-1.5 py-0.5 rounded border border-slate-700/50 text-[10px] font-mono flex items-center gap-1">
+                                            <span>1H:</span>
+                                            <span :class="getSignalColor(item.latest_short_term.direction)">{{ item.latest_short_term.direction }}</span>
+                                        </div>
+
                                         <div v-if="extractImpact(item.analysis)"
                                              class="bg-slate-800/50 px-1.5 py-0.5 rounded border border-slate-700/50 text-[10px] text-slate-400 font-mono">
                                             IMPACT: {{ extractImpact(item.analysis) }}
@@ -300,9 +336,9 @@
                 <div class="p-5 border-b border-slate-800 flex justify-between items-center bg-slate-900/50 rounded-t-xl">
                     <div>
                         <h2 class="text-lg font-bold text-white flex items-center gap-2">
-                            <i class="ri-history-line text-indigo-500"></i> 1H Prediction Accuracy (24h)
+                            <i class="ri-history-line text-indigo-500"></i> 1H Prediction Accuracy (Full History)
                         </h2>
-                        <p class="text-xs text-slate-400 mt-1">Comparing 1H predictions vs Actual Market Moves (Aligned to UTC+8)</p>
+                        <p class="text-xs text-slate-400 mt-1">Comparing ALL historical 1H predictions vs Actual Market Moves</p>
                     </div>
                     <button @click="closeHistoryModal" class="text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 p-2 rounded-full transition">
                         <i class="ri-close-line text-xl"></i>
@@ -358,6 +394,10 @@
                 const latestSignal = ref(null)
                 const latestShortTerm = ref(null)
 
+                // 【新增】控制详细推演(Chain of Thought)显示的开关
+                const showTrendDetails = ref(false)
+                const showShortTermDetails = ref(false)
+
                 const chartInstance = ref(null)
                 const historyChartInstance = ref(null)
                 const activeTab = ref('relevant')
@@ -373,8 +413,22 @@
                 // --- Helper Functions ---
                 const formatTime = (t) => {
                     if (!t) return '-'
-                    if (typeof t === 'string' && t.length >= 16) return t.substring(5, 16);
-                    return t;
+                    // 【修复】如果包含 T 但不含 Z，强制补上 Z 以确保被解析为 UTC
+                    let timeStr = t;
+                    if (typeof timeStr === 'string' && timeStr.includes('T') && !timeStr.endsWith('Z')) {
+                        timeStr += 'Z';
+                    }
+
+                    const date = new Date(timeStr);
+                    return date.toLocaleString('zh-CN', {
+                        timeZone: 'Asia/Shanghai',
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: false
+                    });
                 }
 
                 const getTagName = (tag) => {
@@ -392,13 +446,17 @@
                 const getTagDot = (tag) => ({ 1: 'bg-emerald-500', 2: 'bg-slate-500', 3: 'bg-rose-500' }[tag])
 
                 const getSignalColor = (trend) => {
-                    if (trend === 'BULLISH') return 'text-emerald-400'
-                    if (trend === 'BEARISH') return 'text-rose-400'
+                    if (!trend) return 'text-slate-400';
+                    const t = trend.toUpperCase();
+                    if (t === 'BULLISH') return 'text-emerald-400'
+                    if (t === 'BEARISH') return 'text-rose-400'
                     return 'text-slate-400'
                 }
                 const getSignalColorBg = (trend) => {
-                    if (trend === 'BULLISH') return 'bg-emerald-500'
-                    if (trend === 'BEARISH') return 'bg-rose-500'
+                    if (!trend) return 'bg-slate-400';
+                    const t = trend.toUpperCase();
+                    if (t === 'BULLISH') return 'bg-emerald-500'
+                    if (t === 'BEARISH') return 'bg-rose-500'
                     return 'bg-slate-400'
                 }
 
@@ -422,18 +480,6 @@
                     return 'text-slate-400'
                 }
 
-                // --- 强制北京时间格式化 ---
-                const formatTimeInBJ = (timestamp) => {
-                    return new Date(timestamp).toLocaleString('zh-CN', {
-                        timeZone: 'Asia/Shanghai',
-                        hour12: false,
-                        month: '2-digit',
-                        day: '2-digit',
-                        hour: '2-digit',
-                        minute: '2-digit'
-                    });
-                }
-
                 // --- Core Logic ---
                 const fetchData = async () => {
                     try {
@@ -455,8 +501,7 @@
                         lastUpdated.value = json.updated_at
 
                         processStats(freshData)
-                        extractLatestSignal(freshData)
-                        extractShortTermSignal(freshData)
+                        extractSignals(freshData)
 
                         updateChart()
                     } catch (e) { console.error("Fetch error", e) }
@@ -479,41 +524,48 @@
                     stats.value = s
                 }
 
-                const extractLatestSignal = (data) => {
-                    for (const item of data) {
-                        if (item.analysis && item.analysis.includes('【MACRO_SIGNAL】')) {
-                            try {
-                                const raw = item.analysis.split('【MACRO_SIGNAL】:')[1]
-                                const parts = raw.split('|')
-                                latestSignal.value = {
-                                    confidence: parseFloat(parts[0]),
-                                    trend: parts[1] ? parts[1].trim() : 'NEUTRAL',
-                                    reasoning: parts[2] ? parts[2].split('||')[0] : ''
-                                }
-                                return
-                            } catch(e) {}
-                        }
-                    }
-                }
+                const extractSignals = (data) => {
+    latestSignal.value = null;
+    latestShortTerm.value = null;
 
-                const extractShortTermSignal = (data) => {
-                    for (const item of data) {
-                        if (item.analysis && item.analysis.includes('【1H_PREDICTION】')) {
-                            try {
-                                const raw = item.analysis.split('【1H_PREDICTION】:')[1]
-                                const signalPart = raw.split('||')[0]
-                                const parts = signalPart.split('|')
-                                latestShortTerm.value = {
-                                    confidence: parseFloat(parts[0]),
-                                    trend: parts[1] ? parts[1].trim() : 'NEUTRAL',
-                                    reasoning: parts[2] ? parts[2] : '',
-                                    time: item.time
-                                }
-                                return
-                            } catch(e) {}
-                        }
-                    }
-                }
+    // --- 修复后的 24H 信号提取逻辑 ---
+    let maxTrendTs = 0;
+
+    for (const item of data) {
+        if (item.latest_trend && item.latest_trend.timestamp) {
+            // 1. 获取信号的时间戳 (处理 UTC 格式)
+            let tsStr = item.latest_trend.timestamp;
+            if (typeof tsStr === 'string' && tsStr.includes('T') && !tsStr.endsWith('Z')) {
+                tsStr += 'Z';
+            }
+            const ts = new Date(tsStr).getTime();
+
+            // 2. 比对：保留“最新生成”的那个信号，而不是“最新新闻”的信号
+            if (ts > maxTrendTs) {
+                maxTrendTs = ts;
+                latestSignal.value = item.latest_trend;
+            }
+        }
+    }
+
+    // --- 修复后的 1H 信号提取逻辑 (同理) ---
+    let maxShortTs = 0;
+
+    for (const item of data) {
+        if (item.latest_short_term && item.latest_short_term.timestamp) {
+            let tsStr = item.latest_short_term.timestamp;
+            if (typeof tsStr === 'string' && tsStr.includes('T') && !tsStr.endsWith('Z')) {
+                tsStr += 'Z';
+            }
+            const ts = new Date(tsStr).getTime();
+
+            if (ts > maxShortTs) {
+                maxShortTs = ts;
+                latestShortTerm.value = item.latest_short_term;
+            }
+        }
+    }
+}
 
                 // --- History Modal Logic ---
                 const openHistoryModal = async () => {
@@ -522,27 +574,41 @@
                     await nextTick()
 
                     const predictions = []
-                    allData.value.forEach(item => {
-                        if (item.analysis && item.analysis.includes('【1H_PREDICTION】')) {
-                            try {
-                                const raw = item.analysis.split('【1H_PREDICTION】:')[1]
-                                const signalPart = raw.split('||')[0]
-                                const parts = signalPart.split('|')
 
-                                // 【关键修复】item.time 是 "2024-12-21 14:00:00" (北京时间字符串)
-                                // 为了在图表上正确对齐 UTC 时间戳，我们需要解析它为 "Asia/Shanghai" 的时间
-                                // 加上 +08:00 后，JS 会知道这是东八区时间，从而计算出正确的 Absolute Timestamp
+                    allData.value.forEach(item => {
+                        const structured = item.structured_analysis || {};
+                        const signalsList = structured.short_term_signals || [];
+
+                        // 1. 新 JSON 格式遍历
+                        if (Array.isArray(signalsList)) {
+                            signalsList.forEach(sig => {
+                                if (sig.timestamp && sig.direction) {
+                                    let tsStr = sig.timestamp;
+                                    if (!tsStr.endsWith('Z')) tsStr += 'Z';
+
+                                    const ts = new Date(tsStr).getTime();
+
+                                    predictions.push({
+                                        time: ts,
+                                        trend: sig.direction.toUpperCase(),
+                                        rawTime: sig.timestamp
+                                    });
+                                }
+                            });
+                        }
+
+                        // 2. 旧 String 格式兼容
+                        if (predictions.length === 0 && item.analysis && item.analysis.includes('【1H_PREDICTION】')) {
+                             try {
+                                const raw = item.analysis.split('【1H_PREDICTION】:')[1]
+                                const parts = raw.split('||')[0].split('|')
                                 const bjTimeString = item.time.replace(' ', 'T') + '+08:00';
                                 const ts = new Date(bjTimeString).getTime();
-
-                                predictions.push({
-                                    time: ts,
-                                    trend: parts[1].trim().toUpperCase(),
-                                    rawTime: item.time
-                                })
-                            } catch(e) {}
+                                predictions.push({ time: ts, trend: parts[1].trim().toUpperCase() });
+                             } catch(e) {}
                         }
                     })
+
                     predictions.sort((a, b) => a.time - b.time)
                     predictionHistory.value = predictions
 
@@ -565,11 +631,13 @@
                     }
                 }
 
+                // --- 【核心修复】渲染历史图表逻辑 ---
                 const renderHistoryChart = (klines, predictions) => {
                     const ctx = document.getElementById('historyChart')
                     if (!ctx) return
 
-                    // KLines 时间戳本身是 UTC，这里无需处理，Chart.js 会处理
+                    // 数据源：币安K线 [time, open, high, low, close]
+                    // 我们使用 'close' 来画线，使用 'time' 作为X轴
                     const priceData = klines.map(k => ({ x: k.time, y: k.close }))
 
                     let correct = 0
@@ -577,11 +645,13 @@
                     const predictionPoints = []
 
                     predictions.forEach(pred => {
-                        const newsTime = pred.time
+                        const newsTime = pred.time // 预测产生的 UTC 时间
                         const targetTime = newsTime + 3600 * 1000 // 1小时后
 
-                        // 查找 K 线
+                        // 查找对应的 K 线
+                        // startK: 信号发生时所在的K线
                         const startK = klines.find(k => k.time <= newsTime && newsTime < k.time + 3600000)
+                        // endK: 1小时后用于验证结果的K线
                         const endK = klines.find(k => k.time <= targetTime && targetTime < k.time + 3600000)
 
                         if (startK && endK && pred.trend !== 'NEUTRAL') {
@@ -589,6 +659,7 @@
                             const endPrice = endK.close
                             const priceChange = endPrice - startPrice
 
+                            // 判断预测准确性
                             let isCorrect = false
                             if (pred.trend === 'BULLISH' && priceChange > 0) isCorrect = true
                             if (pred.trend === 'BEARISH' && priceChange < 0) isCorrect = true
@@ -596,12 +667,16 @@
                             if (isCorrect) correct++
                             totalValid++
 
+                            // 【修复关键点】：
+                            // 为了让点完美落在曲线上，我们将点的坐标 (x, y) 强制对齐到 K线的 time 和 close
+                            // 这样点就会“吸附”在折线的拐点上，而不是悬浮在旁边
                             predictionPoints.push({
-                                x: newsTime,
-                                y: startPrice,
+                                x: startK.time,      // 使用K线时间，而不是新闻时间
+                                y: startK.close,     // 使用K线收盘价，确保在线上
                                 trend: pred.trend,
                                 isCorrect: isCorrect,
-                                actualChange: priceChange
+                                actualChange: priceChange,
+                                originalTime: pred.time // 保留原始时间用于Tooltip展示
                             })
                         }
                     })
@@ -620,23 +695,32 @@
                                     data: priceData,
                                     borderColor: '#6366f1',
                                     borderWidth: 2,
-                                    tension: 0.4,
+                                    tension: 0.1, // 稍微平滑一点
                                     pointRadius: 0,
                                     pointHoverRadius: 0
                                 },
                                 {
-                                    label: 'Predictions',
+                                    label: 'Signals',
                                     type: 'scatter',
                                     data: predictionPoints,
                                     pointStyle: 'circle',
-                                    pointRadius: 6,
+                                    pointRadius: 6,        // 点稍微大一点
                                     pointHoverRadius: 10,
+                                    // 【颜色逻辑修复】：
+                                    // 背景色 = 预测方向 (绿=涨，红=跌)
                                     pointBackgroundColor: (ctx) => {
                                         const raw = ctx.raw
                                         if (!raw) return '#888'
-                                        return raw.isCorrect ? '#10b981' : '#f43f5e'
+                                        return raw.trend === 'BULLISH' ? '#10b981' : '#f43f5e'
                                     },
-                                    pointBorderColor: '#fff',
+                                    // 边框色 = 预测准确性
+                                    // 如果预测正确，边框为白色；如果错误，边框透明（或反之，这里用白色突显正确点，或者让错误的点显眼）
+                                    // 简化：这里统一用白色边框，但如果是错误的，可以加粗边框或改变边框颜色
+                                    pointBorderColor: (ctx) => {
+                                        const raw = ctx.raw
+                                        if (!raw) return '#fff'
+                                        return raw.isCorrect ? '#ffffff' : '#000000' // 错误点用黑边框区分
+                                    },
                                     pointBorderWidth: 2
                                 }
                             ]
@@ -652,16 +736,22 @@
                                 legend: { display: false },
                                 tooltip: {
                                     callbacks: {
-                                        // 【关键修改】Tooltip 标题强制显示北京时间
                                         title: function(context) {
-                                            const ts = context[0].parsed.x;
-                                            return formatTimeInBJ(ts);
+                                            const raw = context[0].raw;
+                                            // Tooltip 显示真实的信号时间，而不是对齐后的K线时间
+                                            const ts = raw.originalTime || context[0].parsed.x;
+                                            return new Date(ts).toLocaleString('zh-CN', {
+                                                timeZone: 'Asia/Shanghai',
+                                                month: '2-digit', day: '2-digit',
+                                                hour: '2-digit', minute: '2-digit', hour12: false
+                                            });
                                         },
                                         label: function(context) {
                                             const raw = context.raw
                                             if (raw.trend) {
-                                                const status = raw.isCorrect ? '✅ Correct' : '❌ Wrong'
-                                                return `Predict: ${raw.trend} | Result: ${status} (Change: $${raw.actualChange.toFixed(2)})`
+                                                const status = raw.isCorrect ? '✅ Hit' : '❌ Miss'
+                                                const trendIcon = raw.trend === 'BULLISH' ? '📈 Bull' : '📉 Bear'
+                                                return `${trendIcon} | Result: ${status} ($${raw.actualChange.toFixed(2)})`
                                             } else {
                                                 return `Price: $${raw.y}`
                                             }
@@ -674,19 +764,16 @@
                                     type: 'time',
                                     time: {
                                         unit: 'hour',
-                                        // Chart.js 默认用本地时间，这里我们不改适配器配置，
-                                        // 而是直接通过 callback 覆盖显示的文字为北京时间
-                                        displayFormats: { hour: 'HH:mm' }
+                                        tooltipFormat: 'yyyy-MM-dd HH:mm',
                                     },
                                     ticks: {
                                         color: '#64748b',
-                                        // 【关键修改】X轴标签强制显示北京时间
-                                        callback: function(val, index) {
+                                        maxRotation: 45,
+                                        minRotation: 45,
+                                        callback: function(val) {
                                             return new Date(val).toLocaleTimeString('zh-CN', {
                                                 timeZone: 'Asia/Shanghai',
-                                                hour12: false,
-                                                hour: '2-digit',
-                                                minute: '2-digit'
+                                                hour: '2-digit', minute: '2-digit', hour12: false
                                             });
                                         }
                                     },
@@ -763,7 +850,8 @@
                     showHistoryModal, isLoadingHistory, predictionHistory, correctCount, accuracyRate,
                     openHistoryModal, closeHistoryModal,
                     formatTime, getTagName, getTagStyle, getTagDot, getSignalColor, getSignalColorBg,
-                    extractScore, extractImpact, getScoreColor
+                    extractScore, extractImpact, getScoreColor,
+                    showTrendDetails, showShortTermDetails
                 }
             }
         }).mount('#app')

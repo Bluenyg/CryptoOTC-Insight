@@ -17,4 +17,6 @@ httpx
 sqlalchemy
 aiosqlite
 crawl4ai
+ccxt
+tenacity
 #playwright install ,crawl4ai基于playwright

@@ -13,15 +13,15 @@ class Settings(BaseSettings):
     OPENAI_BASE_URL:str
     DATABASE_URL: str
     #MCP_SERVER_COMMAND: str
-
+    TAAPI_API_KEY :str
     # 24h趋势分析 (大Agent - 趋势)
-    TREND_AGENT_SCHEDULE_SECONDS: int = 900  # 15 分钟
+    #TREND_AGENT_SCHEDULE_SECONDS: int = 1800 # 15 分钟
 
     # 异常脉冲检测 (大Agent - 异常) - 运行更频繁
-    ANOMALY_AGENT_SCHEDULE_SECONDS: int = 300  # 5 分钟
+    #ANOMALY_AGENT_SCHEDULE_SECONDS: int = 300  # 5 分钟
 
     # [新增] 短线 Agent 运行间隔：15分钟 (900秒)
-    SHORT_TERM_INTERVAL : int = 300
+    #SHORT_TERM_INTERVAL : int = 600
 
 
 settings = Settings()

@@ -16,7 +16,7 @@ class FilterOutput(BaseModel):
 
 
 # 1. 定义一个轻量级的LLM，专门用于过滤
-filter_llm = ChatOpenAI(api_key=settings.OPENAI_API_KEY, base_url=settings.OPENAI_BASE_URL, model="qwen3-max")
+filter_llm = ChatOpenAI(api_key=settings.OPENAI_API_KEY, base_url=settings.OPENAI_BASE_URL, model="gemini-3-flash-preview-nothinking")
 
 # 3. 创建一个专门的过滤链
 # --- [FIX] 添加 method="function_calling" 来消除警告 ---

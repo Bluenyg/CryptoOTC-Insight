@@ -2,16 +2,21 @@
 import time
 import httpx
 import json
+import statistics
 from datetime import datetime, timedelta
 
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from config.settings import settings
 from src.schemas.data_models import TradingSignal
+# 【新增】引入 JSON 助手
+from src.utils.json_helper import append_signal_to_structure
 
 # --- 配置 ---
 FETCH_API_URL = "http://api.ibyteai.com:15008/10Ai/dataCenter/crypto/fetchCryptoPanic"
 UPDATE_API_URL = "http://api.ibyteai.com:15008/10Ai/dataCenter/crypto/updatePanicNews"
+# 币安公共接口 (无需鉴权，用于获取辅助K线数据)
+BINANCE_KLINE_URL = "https://api.binance.com/api/v3/klines"
 HEADERS = {'Content-Type': 'application/json'}
 
 llm = ChatOpenAI(
@@ -25,47 +30,55 @@ structured_trend_llm = llm.with_structured_output(
     method="function_calling"
 )
 
-# 【优化】Prompt 模板：引入 "叙事聚类" 和 "加权评分" 机制，解决输出不稳定的问题
+# 【优化 Ver 2.0】Prompt 模板 (保持原有逻辑不变)
 prompt_template = ChatPromptTemplate.from_messages([
     ("system", """
-    你是一位**机构级加密货币宏观策略师 (Institutional Crypto Macro Strategist)**。
-    你的任务是基于碎片化的新闻流，推演未来24小时的主流趋势。
+    你是一位**高频宏观策略师 (HFT Macro Strategist)**，专注于分析新闻流的**时效性衰减 (Time Decay)** 与 **盘面定价状态 (Priced-in Status)**。
 
-    你必须严格执行以下**思维链协议 (Chain of Thought Protocol)**，并将过程写入 `chain_of_thought` 字段：
+    请严格执行以下 **动态加权思维链 (Dynamic Weighted Chain of Thought)**：
 
-    ### 第一步：时间加权清洗 (Time-Weighted Cleaning)
-    遍历新闻，根据 `[x.xh ago]` 标签进行分层：
-    1. **核心驱动 (0h-6h)**: 权重 100%。这是当前市场的定价核心。
-    2. **背景噪音 (6h-24h)**: 权重 30%。除非是由于重大监管/宏观事件（如ETF批准、美联储决议），否则视为已消化的历史。
-    *规则：如果【核心驱动】与【背景噪音】方向相反，必须判定为“趋势反转”，以【核心驱动】为准。*
+    ### 第一步：精细化时效衰减 (Fine-grained Time Decay)
+    **注意参考【Market Data】中的“新闻滞后时长”指标。**
+    - 如果最新新闻滞后 > 30分钟，且 K 线已经出现大幅波动，说明市场已经**消化 (Digested)** 了该信息。
+    - 此时若价格回调，可能是“利好出尽”，而非“趋势反转”。
 
-    ### 第二步：叙事聚类 (Narrative Clustering)
-    不要简单统计 BULLISH/BEARISH 的数量。请将新闻归类为以下叙事主线，并判断哪条主线在主导市场：
-    - **A类 (强宏观)**: 监管政策(SEC)、央行流动性、战争/地缘政治。 -> 影响力：极高
-    - **B类 (市场结构)**: 交易所资金流、大额清算、鲸鱼异动。 -> 影响力：高
-    - **C类 (项目噪音)**: 某代币解锁、小交易所上币、黑客攻击小项目。 -> 影响力：低 (应过滤)
+    ### 第二步：精细化时效衰减 (Fine-grained Time Decay)
+    加密货币市场是半强有效市场，新闻影响随时间呈指数衰减。请按以下层级处理新闻：
+    1. **冲击期 (Shock Phase, 0h - 2h)**: 权重 **120%**。这是目前尚未完全被市场消化的Alpha。重点关注。
+    2. **发酵期 (Digestion Phase, 2h - 8h)**: 权重 **80%**。市场正在博弈，方向确立中。
+    3. **衰退期 (Decay Phase, 8h - 24h)**: 权重 **20%**。除非是结构性改变（如ETF获批），否则视为"已定价 (Priced-in)"的噪音。
 
-    ### 第三步：多空博弈推演 (Scenario Simulation)
-    - 询问自己：“当前看涨逻辑是否依赖于过时的消息？”
-    - 检查是否存在“利好出尽” (Sell the news) 的迹象。
+    *关键判断：如果【冲击期】新闻与【衰退期】新闻矛盾，必须以【冲击期】为准，并判定为“趋势反转”。*
+
+    ### 第三步：边际惊奇度检测 (Marginal Surprise Check)
+    - 检查最新的新闻是否只是对旧闻的**重复 (Echo)**？
+    - 例如：如果 12小时前有"SEC起诉"，而 0.5小时前新闻是"SEC起诉细节曝光"，这属于**延续**；如果是"SEC撤诉"，这属于**反转 (High Surprise)**。
+    - **规则**：仅重复旧观点的近期新闻，不应给予高权重。
+
+    ### 第四步：量价与时效的互证 (Time-Price Verification)
+    结合提供的 Market Data (Price & RSI) 进行最终确认：
+    - **滞后陷阱**: 如果新闻是【衰退期 (10h ago)】的利好，且当前价格已经大涨并回落，RSI > 70，这大概率是 "利好出尽 (Sell the news)"。
+    - **即时共振**: 如果新闻是【冲击期 (0.5h ago)】的利好，且价格刚刚启动 (RSI 50-60)，这是最佳 **BULLISH** 信号。
 
     ---
     **输出要求**：
-    1. **chain_of_thought**: 必须包含上述三个步骤的完整推演过程（至少 150 字）。必须明确指出哪条叙事主线（Narrative）正在主导市场。
-    2. **trend_24h**: 基于推演得出的最终方向。
+    1. **chain_of_thought**: 必须包含上述时效衰减和边际惊奇的分析过程。**必须明确指出最新新闻是否已经被 K 线走势消化 (Priced-in)。**
+    2. **trend_24h**: 最终方向 (BULLISH/BEARISH/NEUTRAL)。
     3. **confidence**: 
-       - >0.8: 多条【核心驱动】新闻共振，且无重大利空。
-       - 0.5-0.7: 多空消息冲突，或仅有旧闻支撑。
-       - <0.5: 市场处于混沌期。
-    4. **reasoning**: 给用户看的最终摘要（精简版），直接点明核心驱动事件。
+       - >0.8: 【冲击期】发生重大事件 + 盘面配合。
+       - <0.5: 主要是【衰退期】旧闻，或新旧消息冲突。
+    4. **reasoning**: 面向用户的简报。直接指出核心驱动事件及其发生的时间距今多久（时效性）。
     """),
     ("human", """
     当前时间锚点：T-0 (Now)。
-    以下是过去24小时的宏观新闻流（包含时间偏差）：
 
+    【实时盘面数据 (Market Data)】
+    {market_context}
+
+    【宏观新闻流 (News Stream - 按时间倒序)】
     {news_data}
 
-    请执行深度宏观分析并生成 TradingSignal。
+    请执行基于时效性的深度分析并生成 TradingSignal。
     """)
 ])
 
@@ -82,29 +95,177 @@ def parse_news_time(time_str: str) -> datetime:
         return datetime.utcnow()
 
 
+# --- 技术指标计算模块 ---
+def calculate_rsi(prices, period=14):
+    """计算 RSI 指标"""
+    if len(prices) < period + 1:
+        return 50.0
+
+    deltas = [prices[i + 1] - prices[i] for i in range(len(prices) - 1)]
+    gains = [d if d > 0 else 0 for d in deltas]
+    losses = [-d if d < 0 else 0 for d in deltas]
+
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+
+    for i in range(period, len(prices) - 1):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+
+    if avg_loss == 0:
+        return 100.0
+
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+
+async def fetch_market_data() -> str:
+    """
+    [使用 Taapi.io] 获取 BTC/ETH 实时价格与技术形态
+    文档参考: https://taapi.io/indicators/candles/
+    """
+    # Taapi 需要带斜杠的 symbol 格式 (如 BTC/USDT)
+    symbols = ["BTC/USDT", "ETH/USDT"]
+    report = []
+
+    # 请确保你在 settings 中配置了 TAAPI_API_KEY
+    # 或者直接写死: api_key = "你的_taapi_secret_key"
+    api_key = settings.TAAPI_API_KEY
+    base_url = "https://api.taapi.io/candles"
+
+    async with httpx.AsyncClient() as client:
+        for symbol in symbols:
+            try:
+                # 构造请求参数
+                params = {
+                    "secret": api_key,
+                    "exchange": "binance",  # 指定交易所
+                    "symbol": symbol,
+                    "interval": "1h",  # 1小时 K线
+                    "results": 25  # 获取最近 25 根 (Taapi limit max=300)
+                }
+
+                # 发送 GET 请求
+                resp = await client.get(base_url, params=params, timeout=10.0)
+
+                if resp.status_code != 200:
+                    print(f"⚠️ [TrendAgent] Taapi Error {symbol}: {resp.text}")
+                    continue
+
+                # Taapi 返回格式: [{"timestamp": 161..., "open": 30000, "close": 30100, ...}, ...]
+                # 数据通常是按时间倒序或正序，Taapi 返回通常是时间正序 (旧->新)，但在 results 参数下可能相反
+                # 根据文档，results 返回的是"historical values"，通常最新的在最后。
+                # 我们可以通过 sort 确保一下顺序
+                klines_data = resp.json()
+
+                if not isinstance(klines_data, list):
+                    continue
+
+                # 按时间戳排序：旧 -> 新
+                klines_data.sort(key=lambda x: x['timestamp'])
+
+                if not klines_data: continue
+
+                # 提取 Close Price 列表用于计算 RSI
+                close_prices = [float(k['close']) for k in klines_data]
+
+                current_price = close_prices[-1]
+                # 获取 24小时前的价格 (索引 -24 或者 0，取决于由多少数据)
+                # 假设拿到了 25 根，第 0 根就是 24小时前
+                open_price_24h = close_prices[0]
+
+                price_change_pct = ((current_price - open_price_24h) / open_price_24h) * 100
+
+                # 复用你原有的 calculate_rsi 函数
+                rsi_val = calculate_rsi(close_prices)
+
+                rsi_status = "Neutral"
+                if rsi_val > 70:
+                    rsi_status = "Overbought"
+                elif rsi_val < 30:
+                    rsi_status = "Oversold"
+
+                display_symbol = symbol.replace("/", "")
+                report.append(
+                    f"- **{display_symbol} (Taapi)**: ${current_price:,.2f} | "
+                    f"24h Change: {price_change_pct:+.2f}% | "
+                    f"RSI(1h): {rsi_val:.1f} ({rsi_status})"
+                )
+
+            except Exception as e:
+                print(f"⚠️ [TrendAgent] Fetch failed for {symbol}: {e}")
+                continue
+
+    if not report:
+        return "Market data unavailable (using news only)."
+
+    return "\n".join(report)
+
+
+# --- 修改后的 write_signal_back_to_api ---
+
+async def fetch_latest_analysis_state(news_item: dict) -> str:
+    """
+    【新增辅助函数】在写入前强制重新拉取最新的 analysis 字段，防止覆盖其他 Agent 的写入。
+    由于不知道 news_item 是 BTC(1) 还是 ETH(2)，我们需要尝试这两个池子来找到该 ID。
+    """
+    target_id = news_item.get('objectId')
+    news_time_str = news_item.get('time')
+
+    # 构造一个极小的时间窗口 (前后1分钟) 来快速定位数据
+    try:
+        if not news_time_str: return ""
+        # 简单解析时间用于查询
+        clean_str = news_time_str.replace("T", " ").replace("Z", "").split(".")[0]
+        dt = datetime.strptime(clean_str, "%Y-%m-%d %H:%M:%S")
+
+        start_t = dt - timedelta(minutes=1)
+        end_t = dt + timedelta(minutes=1)
+
+        # 尝试从 Type 1 (BTC) and Type 2 (ETH) 中查找
+        for coin_type in [1, 2]:
+            # 复用已有的 fetch 逻辑，但查询极小窗口
+            json_data = {
+                "type": coin_type,
+                "startTime": start_t.strftime("%Y-%m-%dT%H:%M:%S"),
+                "endTime": end_t.strftime("%Y-%m-%dT%H:%M:%S")
+            }
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(FETCH_API_URL, headers=HEADERS, json=json_data, timeout=5.0)
+                if resp.status_code == 200:
+                    items = resp.json()
+                    # 寻找匹配 ID 的项
+                    target = next((x for x in items if x.get('objectId') == target_id), None)
+                    if target:
+                        # 找到了！返回数据库里最新的 analysis
+                        print(f"🔄 [TrendAgent] Refetched latest state for ID: {target_id}")
+                        return target.get('analysis') or ""
+    except Exception as e:
+        print(f"⚠️ [TrendAgent] Failed to refetch latest state: {e}")
+
+    # 如果回查失败，只能降级使用内存里的旧数据 (虽然有风险)
+    return news_item.get('analysis') or ""
+
+
 async def write_signal_back_to_api(latest_news: dict, signal: TradingSignal):
     if not latest_news: return
 
     obj_id = latest_news.get('objectId')
     current_tag = latest_news.get('newsTag')
     current_summary = latest_news.get('summary', '')
-    current_analysis = latest_news.get('analysis') or ""
 
-    # 【修改后】将深度思考 (CoT) 也拼接到后面，或者让它显示在前端能看到的地方
-    # 这里我用换行符分隔，展示给用户看
-    full_content = f"{signal.reasoning}\n\n【深度推演】\n{signal.chain_of_thought}"
+    # ================= CRITICAL FIX =================
+    # 1. 不要直接使用 latest_news['analysis']，因为它是旧的快照。
+    # 2. 必须在此刻重新去数据库查一遍最新的 analysis 字符串。
+    current_analysis = await fetch_latest_analysis_state(latest_news)
+    # ================================================
 
-    # 注意：如果你的数据库字段有长度限制，可能需要截断，但通常 text 字段够用
-    signal_str = f"【MACRO_SIGNAL】:{signal.confidence}|{signal.trend_24h}|{full_content}"
-
-    # 【核心修改】替换逻辑
-    parts = current_analysis.split(" || ")
-    # 过滤旧的 MACRO_SIGNAL
-    clean_parts = [p for p in parts if "【MACRO_SIGNAL】" not in p and p.strip()]
-    # 插入新的
-    clean_parts.insert(0, signal_str)
-
-    new_analysis = " || ".join(clean_parts)
+    # "trend_signals" 用于存储 24h 趋势预测
+    new_analysis_json_str = append_signal_to_structure(
+        current_analysis,
+        signal,
+        "trend_signals"
+    )
 
     trend_map = {"BULLISH": 1, "NEUTRAL": 2, "BEARISH": 3}
     trend_int = trend_map.get(signal.trend_24h, 2)
@@ -113,14 +274,14 @@ async def write_signal_back_to_api(latest_news: dict, signal: TradingSignal):
         "objectId": obj_id,
         "newsTag": current_tag,
         "summary": current_summary,
-        "analysis": new_analysis,
+        "analysis": new_analysis_json_str,
         "trendTag": trend_int
     }
 
     try:
         async with httpx.AsyncClient() as client:
             await client.post(UPDATE_API_URL, json=payload, headers=HEADERS, timeout=10.0)
-            print(f"✅ [TrendAgent] Signal UPDATED/SAVED to External DB (News ID: {obj_id}) | Trend: {trend_int}")
+            print(f"✅ [TrendAgent] Signal JSON APPENDED (ID: {obj_id}) | Trend: {trend_int}")
     except Exception as e:
         print(f"❌ [TrendAgent] Save Request Error: {e}")
 
@@ -143,7 +304,7 @@ async def fetch_news_window(coin_type: int, start_time: datetime, end_time: date
 
 
 async def run_trend_analysis():
-    print(f"[{time.ctime()}] 🩺 Running Trend Agent...")
+    print(f"[{time.ctime()}] 🩺 Running Trend Agent (Optimized)...")
 
     try:
         # 1. 查找最新有效新闻 (查过去 24h 寻找锚点)
@@ -154,7 +315,7 @@ async def run_trend_analysis():
         eth_raw = await fetch_news_window(2, search_start, search_end)
         raw_all = btc_raw + eth_raw
 
-        # 过滤有效新闻 (Tag 1,2,3)
+        # 过滤有效新闻
         valid_candidates = [x for x in raw_all if int(x.get('newsTag') or 0) in [1, 2, 3]]
 
         if not valid_candidates:
@@ -164,14 +325,14 @@ async def run_trend_analysis():
         valid_candidates.sort(key=lambda x: str(x.get('time', '0')), reverse=True)
         latest_valid_news = valid_candidates[0]
 
-        # 2. 状态检查（不再跳过，改为提示）
+        # 2. 状态检查 (检查 JSON 中是否已有 trend_signals)
         current_analysis = latest_valid_news.get('analysis') or ""
-        if "【MACRO_SIGNAL】" in current_analysis:
-            print(f"🔄 [TrendAgent] Signal exists for ID {latest_valid_news.get('objectId')}. Updating/Overwriting...")
+        # 简单检查字符串，如果想更严谨可以 try json.loads
+        if "trend_signals" in current_analysis or "【MACRO_SIGNAL】" in current_analysis:
+            print(
+                f"🔄 [TrendAgent] Signal exists for ID {latest_valid_news.get('objectId')}. Appending new prediction...")
 
-        # =======================================================
-        # 3. 时间锚定 (Time Anchoring)
-        # =======================================================
+        # 3. 时间锚定
         anchor_time = parse_news_time(latest_valid_news.get('time'))
         analysis_window_start = anchor_time - timedelta(hours=24)
 
@@ -182,44 +343,59 @@ async def run_trend_analysis():
         eth_context = await fetch_news_window(2, analysis_window_start, anchor_time)
         context_all = btc_context + eth_context
 
-        # 过滤并排序
         final_list = [x for x in context_all if int(x.get('newsTag') or 0) in [1, 2, 3]]
         final_list.sort(key=lambda x: str(x.get('time', '0')), reverse=True)
 
-        # 4. 准备数据给 LLM
+        # 4. 准备新闻数据
         formatted_lines = []
         tag_map = {1: "BULLISH", 2: "NEUTRAL", 3: "BEARISH"}
-
-        # 获取锚定时间 (通常是最新那条新闻的时间，或者是当前时间)
         base_time = anchor_time
 
-        for item in final_list[:50]:  # 限制数量，防止上下文溢出
+        for item in final_list[:50]:
             tag_val = int(item.get('newsTag', 0))
             tag_str = tag_map.get(tag_val, "UNKNOWN")
             content = item.get('summary') or item.get('title')
 
-            # --- 新增：计算时间差 ---
+            # 计算准确的时间差
             item_time = parse_news_time(item.get('time'))
             time_diff = base_time - item_time
             hours_ago = time_diff.total_seconds() / 3600
-            time_str = f"{hours_ago:.1f}h ago"
-            # ---------------------
 
-            # 格式化为： [0.5h ago] [BULLISH] 币安宣布上市新币...
-            formatted_lines.append(f"- [{time_str}] [{tag_str}] {content}")
+            # 格式化: 显式标记时间，方便 LLM 识别 "Shock Phase"
+            time_label = f"{hours_ago:.1f}h ago"
+            formatted_lines.append(f"- [{time_label}] [{tag_str}] {content}")
 
         if not formatted_lines:
             return
 
         news_data_str = "\n".join(formatted_lines)
 
-        # 5. LLM 分析
-        print("🤖 [TrendAgent] Asking LLM...")
+        # 5. 获取辅助盘面数据
+        print("📈 [TrendAgent] Fetching Market Context for Verification...")
+        base_market_str = await fetch_market_data()
+
+        # 计算针对最新一条新闻的滞后时间
+        now_utc = datetime.utcnow()
+        latest_news_time = parse_news_time(latest_valid_news.get('time'))
+        lag_minutes = int((now_utc - latest_news_time).total_seconds() / 60)
+
+        # 注入时间差信息
+        time_context_str = (
+            f"【时间同步状态】\n"
+            f"- 最新一条宏观新闻距今已过去: **{lag_minutes} 分钟**。\n"
+            f"- 请基于此滞后时间判断当前 K 线形态是否已经完成了对该新闻的定价 (Priced-in)。\n\n"
+        )
+
+        final_market_context = time_context_str + base_market_str
+
+        # 6. LLM 分析
+        print("🤖 [TrendAgent] Asking LLM with Time-Decay Logic...")
         signal: TradingSignal = await trend_agent_chain.ainvoke({
+            "market_context": final_market_context,
             "news_data": news_data_str
         })
 
-        # 6. 写回
+        # 7. 写回结果
         await write_signal_back_to_api(latest_valid_news, signal)
 
     except Exception as e:

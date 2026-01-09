@@ -9,7 +9,10 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from config.settings import settings
 from src.schemas.data_models import TradingSignal
-
+# 【新增】引入 JSON 助手
+from src.utils.json_helper import append_signal_to_structure
+import ccxt.async_support as ccxt
+from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type
 # --- 配置 ---
 FETCH_API_URL = "http://api.ibyteai.com:15008/10Ai/dataCenter/crypto/fetchCryptoPanic"
 UPDATE_API_URL = "http://api.ibyteai.com:15008/10Ai/dataCenter/crypto/updatePanicNews"
@@ -29,46 +32,61 @@ structured_llm = llm.with_structured_output(
     method="function_calling"
 )
 
-# 【优化】Prompt 模板：强化量价背离的 CoT 推演
+# 【优化】Prompt 模板：引入消息分级与预期差博弈
 prompt_template = ChatPromptTemplate.from_messages([
     ("system", """
-     你是一个加密货币**高频情绪算法 (High-Frequency Sentiment Algo)**。
-     你的目标是捕捉市场微观结构中的**“情绪冲击”**。
-     
-     你必须严格按照以下步骤填充 `chain_of_thought` 字段：
+    你是一个专精于加密货币微观市场结构的**高频Alpha分析师**。
+    你的任务是利用**新闻情绪**与**实时价格行为 (Price Action)** 的背离来捕捉未来 1小时 的交易机会。
 
-     ### 第一步：情绪半衰期计算 (Sentiment Half-Life)
-     查看数据中的 `[xm ago]` 标签：
-     - **[0m-15m]**：这是“冲击波”。如果是利好，价格应该已经在涨。
-     - **[45m+]**：这是“余波”。如果此时才有利好，往往是诱多陷阱。
+    你必须严格遵循以下思维链 (Chain of Thought) 进行推演：
 
-     ### 第二步：量价一致性验证 (关键！)
-     对比【新闻方向】与传入的【当前市场价格反应】：
-     - 场景 A (共振)：新闻 BULLISH + 价格上涨 (+0.5%) -> **Strong BULLISH** (追涨信号)。
-     - 场景 B (背离)：新闻 BULLISH + 价格下跌 (-0.3%) -> **BEARISH (Bull Trap)** (主力借利好出货)。
-     - 场景 C (无视)：新闻 BULLISH + 价格横盘 (0.0%) -> **NEUTRAL** (市场不买账)。
+    ### Phase 0: 时间同步与新鲜度检查 (CRITICAL)
+    **首先检查传入的【时间同步信息】中新闻距今的时长 (Time Lag)。**
+    - **Lag < 15m**: 属于“冲击期”。价格可能尚未反应完全，重点博弈瞬间动能。
+    - **Lag > 45m**: 属于“尾部期”。新闻发布已久，当前价格极大概率已经**Priced-in (已计入预期)**。
+      *警告*：如果是滞后 > 45m 的利好，且当前价格高位横盘，警惕利好兑现后的回调，**不要当作新利好去追涨**。
 
-     ### 第三步：自我反思
-     在 `chain_of_thought` 中写下：如果我预测错误，最可能的原因是什么？（例如：是否过于依赖了一条 50分钟前的旧闻？）
+    ### Phase 1: 信息量级与衰减评估 (Impact Assessment)
+    不要只看时间，要看新闻的**权重**。
+    - **Tier 1 (核弹级)**: 监管政策、交易所上市/被黑、宏观经济数据(CPI/Rates)。衰减期 > 4小时。
+    - **Tier 2 (普通级)**: 项目合作、巨鲸转账、主流媒体报道。衰减期 ≈ 30-60分钟。
+    - **Tier 3 (噪音)**: KOL言论、非实质性利好、谣言。衰减期 < 15分钟。
+    *任务*：判断当前主导新闻的 Tier，并结合 `[xm ago]` 判断该消息是处于“爆发期”、“发酵期”还是“衰退期”。
 
-     ---
-     **输出规则**：
-     1. 先在 `chain_of_thought` 里把上面三步想清楚。
-     2. 再基于此填写 `trend_24h` (实际指未来1小时趋势)。
-     3. `reasoning` 字段只需总结“当前处于情绪爆发期还是衰退期”以及“量价是否配合”。
-     """),
+    ### Phase 2: 量价博弈分析 (Price Action Interaction)
+    对比【新闻情绪】与【当前市场价格反应】：
+    - **一致性 (Trend Following)**: 
+      Tier 1/2 利好 + 价格显著上涨 = **Strong BULLISH** (情绪共振，追涨)。
+    - **背离/陷阱 (Divergence/Trap)**: 
+      Tier 1/2 利好 + 价格下跌 = **BEARISH (Bull Trap)** (主力借利好出货)。
+    - **衰竭/已计入 (Exhaustion)**: 
+      Tier 2/3 利好 + 价格横盘/微跌 (发布已过15m+) = **BEARISH** (利好兑现，多头乏力)。
+    - **恐惧 (Panic)**: 
+      利空 + 价格暴跌 = **BEARISH** (恐慌蔓延)。
+
+    ### Phase 3: 历史修正 (Self-Correction)
+    参考传入的【历史表现回测】。如果你之前的准确率低于 50%：
+    - 是否对“噪音”反应过度？
+    - 是否忽视了价格已经包含预期的事实？
+
+    ---
+    **输出约束**：
+    1. `chain_of_thought` 必须包含对 News Tier 的定义和 Phase 2 的具体场景判断。
+    2. **特别注意**：尽管输出字段名为 `trend_24h`，但你必须**严格预测未来 1小时 (1H)** 的走势。
+    3. `reasoning` 需精炼总结核心逻辑，例如：“Tier 1 利好发布 10分钟，价格尚未启动，存在巨大预期差，看涨。”
+    """),
     ("human", """
-     【当前市场价格反应】
-     {market_context}
-     
-     【重要：你的历史表现回测】
-     {feedback_context}
+    【当前市场微观数据】
+    {market_context}
 
-     请分析以下过去1小时的实时数据 (精确到分钟):
-     {news_data}
+    【你的近期战绩 (Feedback)】
+    {feedback_context}
 
-     结合以上的内容给出你的未来1小时超短线预测结果。
-     """)
+    【实时新闻流 (Timeline)】
+    {news_data}
+
+    请给出基于上述信息的 1H 超短线交易信号。
+    """)
 ])
 
 short_term_chain = prompt_template | structured_llm
@@ -76,14 +94,13 @@ short_term_chain = prompt_template | structured_llm
 
 def parse_news_time(time_str: str) -> datetime:
     """
-    解析新闻时间，并强制确立为 UTC 时间对象。
+    解析时间，并强制确立为 UTC 时间对象。
     """
     if not time_str: return datetime.now(timezone.utc)
     try:
         clean_str = time_str.replace("T", " ").replace("Z", "").strip()
         if "." in clean_str: clean_str = clean_str.split(".")[0]
         dt = datetime.strptime(clean_str, "%Y-%m-%d %H:%M:%S")
-        # 假设 API 返回的是 UTC 时间，加上 timezone 信息
         return dt.replace(tzinfo=timezone.utc)
     except:
         return datetime.now(timezone.utc)
@@ -108,16 +125,16 @@ async def fetch_binance_klines(symbol: str, interval: str = "15m", limit: int = 
 async def generate_feedback_report(coin_type: int) -> str:
     """
     生成反馈报告。
-    判定逻辑：只要方向正确即为 Correct。
+    【优化版】支持解析 JSON 列表，回测所有历史预测记录。
     """
     symbol = "BTCUSDT" if coin_type == 1 else "ETHUSDT"
 
-    # 1. 获取过去 24 小时的新闻
+    # 1. 获取过去 24 小时的新闻 (以确保覆盖足够的历史预测)
     end_time = datetime.now(timezone.utc)
     start_time = end_time - timedelta(hours=24)
     news_history = await fetch_news_window(coin_type, start_time, end_time)
 
-    # 2. 获取高精度 K 线 (15m)
+    # 2. 获取高精度 K 线 (15m, 足够覆盖24h)
     klines = await fetch_binance_klines(symbol, "15m", 100)
     if not klines or not news_history:
         return "尚无足够的历史数据进行回测，请按常规策略分析。"
@@ -131,55 +148,81 @@ async def generate_feedback_report(coin_type: int) -> str:
     correct_count = 0
     total_eval = 0
 
-    # 3. 逐条比对
+    # 3. 逐条新闻 -> 逐个预测信号 进行比对
     for item in news_history:
         analysis = item.get('analysis') or ""
-        if "【1H_PREDICTION】" not in analysis:
-            continue
+
+        # 跳过空分析
+        if not analysis: continue
+
+        # 容器：存放所有提取出来的 (预测时间, 预测方向)
+        predictions_to_eval = []
 
         try:
-            # 解析预测方向
-            pred_part = analysis.split("【1H_PREDICTION】:")[1].split("||")[0]
-            trend_pred = pred_part.split("|")[1].strip().upper()
+            # A. 尝试 JSON 解析 (新格式)
+            data = json.loads(analysis)
+            # 获取 1H 信号列表
+            signals_list = data.get("short_term_signals", [])
 
-            # 解析新闻时间 (UTC)
-            news_dt = parse_news_time(item.get('time'))
-            news_ts = news_dt.timestamp()
+            for sig in signals_list:
+                pred_ts_str = sig.get("timestamp")
+                direction = sig.get("direction")
+                if pred_ts_str and direction:
+                    predictions_to_eval.append((pred_ts_str, direction))
 
-            # 对齐到 15m K线 (新闻发生时的那一根)
-            start_kline_ts = int(news_ts // 900) * 900
+        except (json.JSONDecodeError, TypeError):
+            # B. 兼容旧格式 (String 解析)
+            if "【1H_PREDICTION】" in analysis:
+                try:
+                    pred_part = analysis.split("【1H_PREDICTION】:")[1].split("||")[0]
+                    trend_pred = pred_part.split("|")[1].strip().upper()
+                    # 旧格式没有单独记录预测时间，只能近似使用新闻发布时间
+                    news_time_str = item.get('time')
+                    predictions_to_eval.append((news_time_str, trend_pred))
+                except:
+                    pass
 
-            # 目标时间：新闻发生后 1小时 (3600秒) 对应的 K 线
-            target_kline_ts = start_kline_ts + 3600
+        # 4. 评估提取出的预测
+        for ts_str, pred_direction in predictions_to_eval:
+            try:
+                # 解析预测产生的时间 (UTC)
+                pred_dt = parse_news_time(ts_str)
+                pred_ts = pred_dt.timestamp()
 
-            # 确保 K 线数据存在
-            if start_kline_ts in kline_map and target_kline_ts in kline_map:
-                start_price = kline_map[start_kline_ts]["open"]
-                end_price = kline_map[target_kline_ts]["close"]
+                # 对齐到 15m K线 (找到预测发生时的那一根)
+                # 比如预测在 12:05 产生，我们取 12:00 的K线作为起点
+                start_kline_ts = int(pred_ts // 900) * 900
 
-                price_change = end_price - start_price
+                # 目标时间：预测后 1小时 (3600秒)
+                target_kline_ts = start_kline_ts + 3600
 
-                actual_trend = "NEUTRAL"
-                if price_change > 0:
-                    actual_trend = "BULLISH"
-                elif price_change < 0:
-                    actual_trend = "BEARISH"
+                # 确保起止 K 线都在我们获取的数据范围内
+                if start_kline_ts in kline_map and target_kline_ts in kline_map:
+                    start_price = kline_map[start_kline_ts]["open"]  # 预测时的价格
+                    end_price = kline_map[target_kline_ts]["close"]  # 1小时后的价格
 
-                # 只有当预测不是 NEUTRAL 时才计入考核
-                if trend_pred != "NEUTRAL":
-                    total_eval += 1
-                    is_correct = (trend_pred == actual_trend)
-                    if is_correct: correct_count += 1
+                    price_change = end_price - start_price
 
-        except Exception:
-            continue
+                    actual_trend = "NEUTRAL"
+                    if price_change > 0:
+                        actual_trend = "BULLISH"
+                    elif price_change < 0:
+                        actual_trend = "BEARISH"
+
+                    # 只有当预测不是 NEUTRAL 时才计入考核 (NEUTRAL 很难界定对错)
+                    if pred_direction != "NEUTRAL":
+                        total_eval += 1
+                        is_correct = (pred_direction == actual_trend)
+                        if is_correct: correct_count += 1
+            except Exception:
+                continue
 
     if total_eval == 0:
         return "过去24小时无有效预测记录。"
 
     accuracy = correct_count / total_eval
 
-    feedback_str = f"【系统回测报告】过去24小时共评估 {total_eval} 次预测，准确率为 {accuracy:.0%}。"
+    feedback_str = f"【系统回测报告】过去24小时共评估 {total_eval} 次历史预测(含追加更新)，准确率为 {accuracy:.0%}。"
 
     if accuracy < 0.5:
         feedback_str += "\n⚠️ 警告：准确率偏低。请反思是否存在过度看多/看空的情绪，更加关注实际价格动能。"
@@ -190,7 +233,42 @@ async def generate_feedback_report(coin_type: int) -> str:
     return feedback_str
 
 
-# ==============================================================================
+# --- 修改后的 write_short_term_signal ---
+
+async def fetch_latest_analysis_state_short(news_item: dict) -> str:
+    """
+    【新增辅助函数】回查最新状态，防止覆盖 TrendAgent 的数据。
+    """
+    target_id = news_item.get('objectId')
+    news_time_str = news_item.get('time')
+
+    try:
+        if not news_time_str: return ""
+        clean_str = news_time_str.replace("T", " ").replace("Z", "").split(".")[0]
+        dt = datetime.strptime(clean_str, "%Y-%m-%d %H:%M:%S")
+
+        # 缩小查找范围
+        start_t = dt - timedelta(minutes=1)
+        end_t = dt + timedelta(minutes=1)
+
+        for coin_type in [1, 2]:
+            json_data = {
+                "type": coin_type,
+                "startTime": start_t.strftime("%Y-%m-%dT%H:%M:%S"),
+                "endTime": end_t.strftime("%Y-%m-%dT%H:%M:%S")
+            }
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(FETCH_API_URL, headers=HEADERS, json=json_data, timeout=5.0)
+                if resp.status_code == 200:
+                    items = resp.json()
+                    target = next((x for x in items if x.get('objectId') == target_id), None)
+                    if target:
+                        print(f"🔄 [ShortTermAgent] Refetched latest state for ID: {target_id}")
+                        return target.get('analysis') or ""
+    except Exception as e:
+        print(f"⚠️ [ShortTermAgent] Failed to refetch latest state: {e}")
+
+    return news_item.get('analysis') or ""
 
 
 async def write_short_term_signal(latest_news: dict, signal: TradingSignal):
@@ -199,30 +277,31 @@ async def write_short_term_signal(latest_news: dict, signal: TradingSignal):
     obj_id = latest_news.get('objectId')
     current_tag = latest_news.get('newsTag')
     current_summary = latest_news.get('summary', '')
-    current_analysis = latest_news.get('analysis') or ""
 
-    # 【修改后】拼接 CoT
-    full_content = f"{signal.reasoning}\n\n【思维链】\n{signal.chain_of_thought}"
+    # ================= CRITICAL FIX =================
+    # 在写入前，强制同步最新的数据库状态
+    current_analysis = await fetch_latest_analysis_state_short(latest_news)
+    # ================================================
 
-    signal_str = f"⚡【1H_PREDICTION】:{signal.confidence}|{signal.trend_24h}|{full_content}"
-
-    parts = current_analysis.split(" || ")
-    clean_parts = [p for p in parts if "【1H_PREDICTION】" not in p and p.strip()]
-    clean_parts.insert(0, signal_str)
-    new_analysis = " || ".join(clean_parts)
+    # "short_term_signals" 用于 1H 预测
+    new_analysis_json_str = append_signal_to_structure(
+        current_analysis,
+        signal,
+        "short_term_signals"
+    )
 
     payload = {
         "objectId": obj_id,
         "newsTag": current_tag,
         "summary": current_summary,
-        "analysis": new_analysis,
+        "analysis": new_analysis_json_str,
     }
 
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(UPDATE_API_URL, json=payload, headers=HEADERS, timeout=10.0)
             if response.status_code == 200:
-                print(f"✅ [ShortTermAgent] 1H Signal UPDATED for ID: {obj_id}")
+                print(f"✅ [ShortTermAgent] 1H Signal JSON APPENDED for ID: {obj_id}")
             else:
                 print(f"❌ [ShortTermAgent] Save Failed: {response.status_code}")
     except Exception as e:
@@ -274,25 +353,58 @@ async def run_short_term_analysis():
 
         # 2. 防重复/更新检查
         current_analysis = latest_valid_news.get('analysis') or ""
-        if "【1H_PREDICTION】" in current_analysis:
-            print(f"🔄 [ShortTermAgent] Signal exists. Updating with 15m-Precision Feedback Loop...")
+        # 检查 JSON key 是否存在
+        if "short_term_signals" in current_analysis or "【1H_PREDICTION】" in current_analysis:
+            print(f"🔄 [ShortTermAgent] Signal exists. Appending new prediction with Feedback Loop...")
 
         # =======================================================
-        # 3. 生成高精度反馈
+        # 3. 生成高精度反馈 (已更新为支持 JSON 列表回测)
         # =======================================================
         feedback_report = await generate_feedback_report(1)
 
-        # 【优化】获取当前实时价格动能 (Price Action) 用于 Prompt 上下文
+        # 获取 15m K线 (limit=3)
         klines_15m = await fetch_binance_klines("BTCUSDT", "15m", limit=3)
+
+        # 1. 计算时间滞后 (Time Lag)
+        now_utc = datetime.now(timezone.utc)
+        news_time_utc = parse_news_time(latest_valid_news.get('time'))
+
+        # 计算分钟差 (防止负数)
+        lag_seconds = (now_utc - news_time_utc).total_seconds()
+        lag_minutes = int(lag_seconds / 60)
+        if lag_minutes < 0: lag_minutes = 0
+
+        # 2. 构建包含时间差的市场上下文
+        market_context = "数据不可用"
         if klines_15m:
-            latest_k = klines_15m[-1]
-            open_p = float(latest_k[1])
-            close_p = float(latest_k[4])
+            current_k = klines_15m[-1]
+            prev_k = klines_15m[-2]
+            open_p = float(current_k[1])
+            close_p = float(current_k[4])
             pct_change = ((close_p - open_p) / open_p) * 100
-            market_context = f"当前BTC 15mK线走势: {'📈' if pct_change > 0 else '📉'} {pct_change:.2f}% (收盘价: {close_p})"
+
+            # 显式告诉 LLM 这个时间差
+            time_sync_info = (
+                f"⚠️【时间同步警报】\n"
+                f"- 当前系统时间: {now_utc.strftime('%H:%M')} (UTC)\n"
+                f"- 最新新闻时间: {news_time_utc.strftime('%H:%M')} (UTC)\n"
+                f"- **新闻滞后时长 (Time Lag)**: {lag_minutes} 分钟\n"
+                f"- 下方 K 线数据为: **实时最新数据** (包含了这 {lag_minutes} 分钟内的市场反应)\n"
+                f"-----------------------------\n"
+            )
+
+            curr_vol = float(current_k[5])
+            prev_vol = float(prev_k[5])
+            vol_status = "放量" if curr_vol > prev_vol else "缩量"
+
+            market_context = (
+                f"{time_sync_info}"
+                f"1. 价格走势: {'📈' if pct_change > 0 else '📉'} {pct_change:.2f}% (现价: {close_p})\n"
+                f"2. 成交量态势: 较上一根15mK线呈现【{vol_status}】状态。\n"
+                f"3. 趋势强度: 只有在高波动(>0.3%)配合放量时，信号才有效，否则视为噪音。"
+            )
         else:
-            market_context = "当前市场价格数据不可用。"
-        # =======================================================
+            market_context = f"当前市场价格数据不可用 (新闻滞后: {lag_minutes}m)。"
 
         # 4. 时间锚定
         anchor_time = parse_news_time(latest_valid_news.get('time'))
